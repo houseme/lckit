@@ -3,7 +3,7 @@
 [English](../en/README.md) · **中文**
 
 Linux + Caddy Kit 命令手册。  
-项目说明：[README_CN.md](../../README_CN.md)
+仓库：[https://github.com/houseme/lckit-apache](https://github.com/houseme/lckit-apache)
 
 ---
 
