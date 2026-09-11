@@ -7,14 +7,16 @@ PHP_SOCKET=""
 
 php_save_state() {
   ensure_base_dirs
+  mkdir -p /var/lib/lckit/php-data 2>/dev/null || true
+  # Avoid clashing with /var/lib/lckit/php session directory
   printf 'PHP_FPM_UNIT=%s\nPHP_SOCKET=%s\nPHP_VERSION=%s\n' \
-    "${PHP_FPM_UNIT}" "${PHP_SOCKET}" "${1:-}" > "${LCKIT_STATE}/php"
+    "${PHP_FPM_UNIT}" "${PHP_SOCKET}" "${1:-}" > "${LCKIT_STATE}/php.env"
 }
 
 php_load_state() {
-  if [[ -f "${LCKIT_STATE}/php" ]]; then
+  if [[ -f "${LCKIT_STATE}/php.env" ]]; then
     # shellcheck disable=SC1090
-    source "${LCKIT_STATE}/php" || true
+    source "${LCKIT_STATE}/php.env" || true
   fi
 }
 
@@ -170,7 +172,7 @@ php_tune_deb() {
   [[ -f "${conf}" ]] || return 0
   sed -i "s/^user = .*/user = ${user}/" "${conf}"
   sed -i "s/^group = .*/group = ${user}/" "${conf}"
-  mkdir -p /var/lib/lckit/php/{session,cache}
+  mkdir -p /var/lib/lckit/php/session /var/lib/lckit/php/cache
   chown -R "${user}:${user}" /var/lib/lckit/php 2>/dev/null || true
   chmod 750 /var/lib/lckit/php /var/lib/lckit/php/session /var/lib/lckit/php/cache 2>/dev/null || true
   _php_pool_performance "${conf}"
