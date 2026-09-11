@@ -1,6 +1,6 @@
 # lckit app — Backend application units
 
-[← Back to docs home](README.md) · [中文](../zh/app.md)
+[← Back to docs home](../README.md) · [中文](../zh/app.md)
 
 Register a Go / Rust / any HTTP binary as a systemd service, then front it with `site add -t proxy`.
 

@@ -1,6 +1,6 @@
 # lckit site — Virtual hosts
 
-[← Back to docs home](README.md) · [中文](../zh/site.md)
+[← Back to docs home](../README.md) · [中文](../zh/site.md)
 
 Manage static / PHP / reverse-proxy sites. Config files live in `/etc/caddy/sites/<domain>.caddy`.
 

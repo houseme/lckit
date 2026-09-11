@@ -1,6 +1,6 @@
 # lckit php — PHP-FPM install & status
 
-[← Back to docs home](README.md) · [中文](../zh/php.md)
+[← Back to docs home](../README.md) · [中文](../zh/php.md)
 
 ## Subcommands
 

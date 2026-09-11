@@ -6,7 +6,7 @@
 - **Implementation note**: Independent implementation. Product ideas only; **not** derived from GPL sources.
 - **CLI**: `lckit`
 
-Chinese: [README_CN.md](README_CN.md) · Docs: [docs/en/README.md](docs/en/README.md) · [docs/zh/README.md](docs/zh/README.md)
+Chinese: [README_CN.md](README_CN.md) · Docs: [docs/README.md](docs/README.md) · [docs/zh/README.md](docs/zh/README.md)
 
 ## Features
 
