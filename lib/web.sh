@@ -20,12 +20,19 @@ web_install_caddy() {
 
 web_write_main_config() {
   ensure_base_dirs
+  # Keep admin endpoint on localhost so `caddy reload` / systemctl reload works.
   cat > "${CADDY_MAIN}" <<EOF
 {
-	admin off
+	admin localhost:2019
 }
 import ${CADDY_SITES}/*.caddy
 EOF
+  # Caddy user must write access logs
+  mkdir -p /var/log/caddy
+  if id caddy >/dev/null 2>&1; then
+    chown -R caddy:caddy /var/log/caddy 2>/dev/null || true
+    chmod 755 /var/log/caddy 2>/dev/null || true
+  fi
 }
 
 web_write_default_site() {
@@ -101,13 +108,10 @@ HTML
 }
 
 web_reload() {
-  if systemctl is-active --quiet caddy 2>/dev/null; then
-    try "systemctl reload caddy"
-    if ! systemctl is-active --quiet caddy 2>/dev/null; then
-      try "systemctl restart caddy"
-    fi
-  else
-    try "systemctl enable --now caddy"
+  # Prefer restart: robust when admin API is unavailable or config just changed.
+  try "systemctl restart caddy"
+  if ! systemctl is-active --quiet caddy 2>/dev/null; then
+    warnl "caddy is not active; check: journalctl -u caddy -n 50"
   fi
 }
 
