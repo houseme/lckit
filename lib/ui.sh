@@ -14,7 +14,7 @@ _ask_yn() {
 
 _ask_mirror() {
   local choice
-  cat <<'EOF'
+  cat >&2 <<'EOF'
 Mirror profile:
   1) official
   2) tuna
