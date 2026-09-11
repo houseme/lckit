@@ -47,6 +47,9 @@ Database (can be installed AFTER setup):
 PHP (can be installed AFTER setup):
   lckit php install [--version 8.4]
   lckit php status
+  lckit php ext install redis opcache imagick memcached swoole ...
+  lckit php ext install common|full
+  lckit php ext list | status
 
 Mirror commands:
   lckit mirror show | set official|tuna|aliyun|ustc | apply | list
@@ -56,6 +59,7 @@ Examples:
   lckit db install mariadb
   lckit db install postgresql
   lckit php install --version 8.4
+  lckit php ext install full
   lckit site add -d blog.example.com -t php
   lckit app  add --name api --bin /opt/api/api --port 8080
   lckit site add -d api.example.com -t proxy --upstream http://127.0.0.1:8080

@@ -183,6 +183,449 @@ php_tune_deb() {
   fi
 }
 
+# ---------------------------------------------------------------------------
+# PHP extensions
+# ---------------------------------------------------------------------------
+
+# Known extension aliases -> logical name
+php_ext_normalize() {
+  local raw
+  raw="$(echo "$1" | tr '[:upper:]' '[:lower:]')"
+  case "${raw}" in
+    php_redis|php-redis) echo redis ;;
+    php_opcache|php-opcache|zendopcache) echo opcache ;;
+    php_imagick|php-pecl-imagick|imagick) echo imagick ;;
+    php_memcached|php-memcached) echo memcached ;;
+    php_sodium|php-sodium|sodium|libsodium) echo sodium ;;
+    php_swoole|php-swoole|swoole) echo swoole ;;
+    php_imap|php-imap|imap) echo imap ;;
+    php_bz2|php-bz2|bz2) echo bz2 ;;
+    php_ldap|php-ldap|ldap) echo ldap ;;
+    php_fileinfo|php-fileinfo|fileinfo) echo fileinfo ;;
+    php_exif|php-exif|exif) echo exif ;;
+    php_mysql|php-mysql|mysqli|pdo_mysql) echo mysql ;;
+    php_pgsql|php-pgsql|pgsql|pdo_pgsql) echo pgsql ;;
+    php_gd|php-gd|gd) echo gd ;;
+    php_mbstring|php-mbstring|mbstring) echo mbstring ;;
+    php_xml|php-xml|xml|dom|simplexml) echo xml ;;
+    php_curl|php-curl|curl) echo curl ;;
+    php_intl|php-intl|intl) echo intl ;;
+    php_zip|php-zip|zip) echo zip ;;
+    php_sqlite3|php-sqlite3|sqlite3) echo sqlite3 ;;
+    php_redis|redis) echo redis ;;
+    ioncube|ioncube_loader|loader) echo ioncube ;;
+    sourceguardian|ixed|ixed.7|ixed.8) echo sourceguardian ;;
+    xcache) echo xcache ;;
+    eaccelerator) echo eaccelerator ;;
+    *) echo "${raw}" ;;
+  esac
+}
+
+php_ext_available_list() {
+  cat <<'EOF'
+# Core / common (usually packaged with PHP)
+opcache
+gd
+mbstring
+xml
+curl
+intl
+zip
+bcmath
+calendar
+exif
+ffi
+fileinfo
+ftp
+gettext
+iconv
+pdo
+shmop
+sockets
+sysvmsg
+sysvsem
+sysvshm
+tokenizer
+# Database
+mysql
+mysqli
+pdo_mysql
+pgsql
+pdo_pgsql
+sqlite3
+pdo_sqlite
+# Popular PECL / extra
+redis
+memcached
+imagick
+swoole
+apcu
+igbinary
+msgpack
+mongodb
+amqp
+# Mail / directory
+imap
+ldap
+# Compression
+bz2
+zstd
+lz4
+# Crypto
+sodium
+# Commercial loaders (special)
+ioncube
+sourceguardian
+# Obsolete (PHP 5 era — not installable on modern PHP)
+xcache
+eaccelerator
+EOF
+}
+
+# Map logical ext name -> package name(s) for current OS
+php_ext_packages() {
+  local ext="$1"
+  local ver="${2:-}"
+  if os_is_rhel; then
+    case "${ext}" in
+      opcache) echo "php-opcache" ;;
+      redis) echo "php-pecl-redis" ;;
+      memcached) echo "php-pecl-memcached" ;;
+      imagick) echo "php-pecl-imagick" ;;
+      swoole) echo "php-pecl-swoole" ;;
+      apcu) echo "php-pecl-apcu" ;;
+      igbinary) echo "php-pecl-igbinary" ;;
+      msgpack) echo "php-pecl-msgpack" ;;
+      mongodb) echo "php-pecl-mongodb" ;;
+      amqp) echo "php-pecl-amqp" ;;
+      bz2) echo "php-bz2" ;;
+      zstd) echo "php-zstd" ;;
+      lz4) echo "php-lz4" ;;
+      sodium) echo "php-sodium" ;;
+      imap) echo "php-imap" ;;
+      ldap) echo "php-ldap" ;;
+      exif) echo "php-exif" ;;
+      fileinfo) echo "php-process" ;; # fileinfo often in php-common/process on RHEL
+      gd) echo "php-gd" ;;
+      mbstring) echo "php-mbstring" ;;
+      xml) echo "php-xml" ;;
+      curl) echo "php-pecl-curl" ;;
+      intl) echo "php-intl" ;;
+      zip) echo "php-pecl-zip" ;;
+      bcmath) echo "php-bcmath" ;;
+      mysql|mysqli|pdo_mysql) echo "php-mysqlnd" ;;
+      pgsql|pdo_pgsql) echo "php-pgsql" ;;
+      sqlite3|pdo_sqlite) echo "php-pdo" ;;
+      *) echo "php-${ext}" ;;
+    esac
+  else
+    # Debian / Ubuntu (sury / ondrej)
+    local p="php${ver}-${ext}"
+    case "${ext}" in
+      opcache) p="php${ver}-opcache" ;;
+      mysql|mysqli|pdo_mysql) p="php${ver}-mysql" ;;
+      pgsql|pdo_pgsql) p="php${ver}-pgsql" ;;
+      sqlite3|pdo_sqlite) p="php${ver}-sqlite3" ;;
+      fileinfo) p="" ;; # bundled
+      iconv|pdo|tokenizer|shmop|sockets|sysvmsg|sysvsem|sysvshm|calendar|ftp|gettext)
+        p="" ;; # usually bundled in common/cli
+      ioncube|sourceguardian|xcache|eaccelerator)
+        p="" ;;
+      *) p="php${ver}-${ext}" ;;
+    esac
+    echo "${p}"
+  fi
+}
+
+php_ext_is_loaded() {
+  local ext="$1"
+  local ver="${2:-}"
+  local bin="php"
+  if [[ -n "${ver}" ]] && have "php${ver}"; then
+    bin="php${ver}"
+  fi
+  "${bin}" -m 2>/dev/null | grep -qiE "^${ext}$"
+}
+
+php_ext_bundle_common() {
+  echo "opcache gd mbstring xml curl intl zip bcmath exif fileinfo sqlite3"
+}
+
+php_ext_bundle_full() {
+  echo "$(php_ext_bundle_common) redis memcached imagick imap ldap bz2 sodium mysql pgsql"
+}
+
+php_ext_install_one() {
+  local ext="$1"
+  local ver="${2:-}"
+
+  case "${ext}" in
+    xcache|eaccelerator)
+      warnl "${ext} is obsolete (PHP 5 era) and not supported on modern PHP — skipped"
+      return 0
+      ;;
+    ioncube)
+      php_ext_install_ioncube "${ver}"
+      return $?
+      ;;
+    sourceguardian)
+      php_ext_install_sourceguardian "${ver}"
+      return $?
+      ;;
+  esac
+
+  if php_ext_is_loaded "${ext}" "${ver}"; then
+    info "extension already loaded: ${ext}"
+    return 0
+  fi
+
+  local pkgs
+  pkgs="$(php_ext_packages "${ext}" "${ver}")"
+  if [[ -z "${pkgs}" ]]; then
+    info "extension '${ext}' is typically bundled — checking load state only"
+    php_ext_is_loaded "${ext}" "${ver}" && return 0
+    warnl "extension not loaded and no package mapping: ${ext}"
+    return 0
+  fi
+
+  info "installing packages for ${ext}: ${pkgs}"
+  # shellcheck disable=SC2086
+  pkg_install ${pkgs} || {
+    warnl "package install failed for ${ext} (${pkgs})"
+    return 1
+  }
+  return 0
+}
+
+php_ext_restart() {
+  php_load_state
+  local unit="${PHP_FPM_UNIT:-}"
+  if [[ -z "${unit}" ]]; then
+    if [[ -n "${PHP_VERSION:-}" ]] && [[ -f "/etc/php/${PHP_VERSION}/fpm/pool.d/www.conf" ]]; then
+      unit="php${PHP_VERSION}-fpm"
+    elif os_is_rhel; then
+      unit="php-fpm"
+    fi
+  fi
+  if [[ -n "${unit}" ]]; then
+    try "systemctl restart ${unit}"
+  fi
+}
+
+# ionCube Loader — commercial; download from official site (best effort)
+php_ext_install_ioncube() {
+  local ver="${1:-}"
+  php_load_state
+  ver="${ver:-${PHP_VERSION:-8.4}}"
+  local arch
+  arch="$(uname -m)"
+  case "${arch}" in
+    x86_64|amd64) arch=x86-64 ;;
+    aarch64|arm64) arch=aarch64 ;;
+    *) warnl "unsupported arch for ionCube: ${arch}"; return 1 ;;
+  esac
+  local ver_nodot="${ver//./}"
+  local url="https://downloads.ioncube.com/loader_downloads/ioncube_loaders_lin_${arch}.tar.gz"
+  local tmp=/tmp/ioncube_loaders.tgz
+  info "downloading ionCube loaders"
+  if ! curl -fsSL -o "${tmp}" "${url}"; then
+    warnl "ionCube download failed; install manually from https://www.ioncube.com/loaders.php"
+    return 1
+  fi
+  local dir=/opt/ioncube
+  mkdir -p "${dir}"
+  tar zxf "${tmp}" -C /opt
+  rm -f "${tmp}"
+  local so
+  so="$(find /opt -name "ioncube_loader_lin_${ver}.so" 2>/dev/null | head -n1)"
+  if [[ -z "${so}" ]]; then
+    warnl "no ionCube loader for PHP ${ver}"
+    return 1
+  fi
+  local confd=""
+  if os_is_rhel; then
+    confd=/etc/php.d
+  else
+    confd="/etc/php/${ver}/fpm/conf.d"
+    mkdir -p "${confd}" "/etc/php/${ver}/cli/conf.d"
+  fi
+  local line="zend_extension=${so}"
+  if [[ -n "${confd}" && -d "${confd}" ]]; then
+    echo "${line}" > "${confd}/00-ioncube.ini"
+    if [[ -d "/etc/php/${ver}/cli/conf.d" ]]; then
+      echo "${line}" > "/etc/php/${ver}/cli/conf.d/00-ioncube.ini"
+    fi
+  else
+    warnl "cannot locate PHP conf.d for ionCube"
+    return 1
+  fi
+  info "ionCube loader installed (${so})"
+  return 0
+}
+
+# SourceGuardian loader — commercial; best effort
+php_ext_install_sourceguardian() {
+  local ver="${1:-}"
+  php_load_state
+  ver="${ver:-${PHP_VERSION:-8.4}}"
+  local arch
+  arch="$(uname -m)"
+  case "${arch}" in
+    x86_64|amd64) arch=x86-64 ;;
+    aarch64|arm64) arch=aarch64 ;;
+    *) warnl "unsupported arch for SourceGuardian: ${arch}"; return 1 ;;
+  esac
+  local url="https://www.sourceguardian.com/loaders/download/loaders.lin-${arch}.tar.gz"
+  local tmp=/tmp/ixed-loaders.tgz
+  info "downloading SourceGuardian loaders"
+  if ! curl -fsSL -o "${tmp}" "${url}"; then
+    warnl "SourceGuardian download failed; see https://www.sourceguardian.com/loaders.php"
+    return 1
+  fi
+  local dir=/opt/sourceguardian
+  mkdir -p "${dir}"
+  tar zxf "${tmp}" -C "${dir}" || true
+  rm -f "${tmp}"
+  local so
+  so="$(find "${dir}" -name "ixed.${ver}*.lin" 2>/dev/null | head -n1)"
+  if [[ -z "${so}" ]]; then
+    # try ixed.8.4.lin style already extracted flat
+    so="$(find "${dir}" /opt -name "ixed.${ver}.lin" 2>/dev/null | head -n1)"
+  fi
+  if [[ -z "${so}" ]]; then
+    warnl "no SourceGuardian loader for PHP ${ver}; place ixed.${ver}.lin manually"
+    return 1
+  fi
+  local confd=""
+  if os_is_rhel; then
+    confd=/etc/php.d
+  else
+    confd="/etc/php/${ver}/fpm/conf.d"
+    mkdir -p "${confd}"
+  fi
+  echo "extension=${so}" > "${confd}/00-sourceguardian.ini"
+  info "SourceGuardian loader installed (${so})"
+  return 0
+}
+
+php_ext_install_many() {
+  local ver="${1:-}"
+  shift || true
+  php_load_state
+  ver="${ver:-${PHP_VERSION:-8.4}}"
+  if [[ -z "${ver}" || "${ver}" == "unknown" ]]; then
+    # try detect
+    if have php; then
+      ver="$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;' 2>/dev/null || echo 8.4)"
+    else
+      ver=8.4
+    fi
+  fi
+
+  local -a wanted=()
+  local item norm
+  for item in "$@"; do
+    case "${item}" in
+      common|default)
+        # shellcheck disable=SC2046
+        wanted+=($(php_ext_bundle_common))
+        ;;
+      full|all)
+        # shellcheck disable=SC2046
+        wanted+=($(php_ext_bundle_full))
+        ;;
+      *)
+        norm="$(php_ext_normalize "${item}")"
+        wanted+=("${norm}")
+        ;;
+    esac
+  done
+
+  if [[ ${#wanted[@]} -eq 0 ]]; then
+    die "usage: lckit php ext install <name...|common|full>"
+  fi
+
+  local ext failed=0
+  for ext in "${wanted[@]}"; do
+    php_ext_install_one "${ext}" "${ver}" || failed=$((failed + 1))
+  done
+  php_ext_restart
+  info "extension install finished (failed=${failed})"
+  echo
+  php_ext_status
+  return 0
+}
+
+php_ext_status() {
+  php_load_state
+  local ver="${PHP_VERSION:-}"
+  local bin="php"
+  if [[ -n "${ver}" ]] && have "php${ver}"; then
+    bin="php${ver}"
+  fi
+  echo "php binary: $(command -v "${bin}" 2>/dev/null || echo missing)"
+  echo "version:    $(${bin} -v 2>/dev/null | head -n1 || echo unknown)"
+  echo
+  echo "loaded modules:"
+  ${bin} -m 2>/dev/null | sed 's/^/  /' || true
+  echo
+  echo "selected checks:"
+  local e
+  for e in opcache redis memcached imagick swoole sodium imap ldap bz2 fileinfo exif gd; do
+    if php_ext_is_loaded "${e}" "${ver}"; then
+      printf '  %-12s OK\n' "${e}"
+    else
+      printf '  %-12s --\n' "${e}"
+    fi
+  done
+}
+
+cmd_php_ext() {
+  local sub="${1:-list}"
+  shift || true
+  case "${sub}" in
+    install|add)
+      need_root
+      local ver=""
+      local -a names=()
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --version|-v) ver="${2:-}"; shift 2 ;;
+          *) names+=("$1"); shift ;;
+        esac
+      done
+      php_ext_install_many "${ver}" "${names[@]}"
+      ;;
+    list|available)
+      php_ext_available_list
+      ;;
+    status|ls)
+      php_ext_status
+      ;;
+    ""|help|-h|--help)
+      cat <<'EOF'
+Usage: lckit php ext <install|list|status>
+
+  lckit php ext install redis opcache imagick memcached
+  lckit php ext install common          # opcache, gd, mbstring, xml, curl, intl, zip, ...
+  lckit php ext install full            # common + redis/memcached/imagick/imap/ldap/sodium/bz2/db
+  lckit php ext install ioncube         # commercial loader (best-effort download)
+  lckit php ext install sourceguardian
+  lckit php ext list
+  lckit php ext status
+
+Notes:
+  - xcache / eaccelerator are obsolete (PHP 5) and skipped on modern PHP.
+  - ionCube / SourceGuardian require their official loaders; install is best-effort.
+  - fileinfo/iconv/pdo/etc. are often already bundled — install is a no-op if loaded.
+EOF
+      ;;
+    *)
+      die "unknown php ext subcommand: ${sub}"
+      ;;
+  esac
+}
+
 cmd_php() {
   local sub="${1:-status}"
   shift || true
@@ -199,6 +642,9 @@ cmd_php() {
       done
       php_install "${ver}"
       ;;
+    ext|extensions)
+      cmd_php_ext "$@"
+      ;;
     status)
       php_load_state
       echo "version: ${PHP_VERSION:-unknown}"
@@ -210,11 +656,16 @@ cmd_php() {
       ;;
     ""|help|-h|--help)
       cat <<'EOF'
-Usage: lckit php <install|status>
+Usage: lckit php <install|ext|status>
 
   lckit php install [--version 8.4]
   lckit php install 8.3
   lckit php status
+  lckit php ext install redis imagick memcached swoole
+  lckit php ext install common
+  lckit php ext install full
+  lckit php ext list
+  lckit php ext status
 
 After install, create a PHP site:
   lckit site add -d blog.example.com -t php
