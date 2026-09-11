@@ -1,34 +1,37 @@
 # LCKit
 
-**LCKit**（Linux + Caddy Kit）是一款模块化 Bash 工具：以 [Caddy](https://caddyserver.com) 为反向代理 / TLS / 静态站前端，可选安装 MariaDB、PHP-FPM、PostgreSQL 18，并提供 Go / Rust 等 HTTP 后端的应用单元与站点管理，支持国内公共镜像。
+**LCKit** (Linux + Caddy Kit) is a modular Bash toolkit: [Caddy](https://caddyserver.com) as reverse proxy / TLS / static front-end, optional MariaDB, PHP-FPM, and PostgreSQL 18, plus app-unit management for Go/Rust/any HTTP backend, and China public mirrors.
 
-- **协议**：Apache License 2.0  
-- **实现声明**：本仓库为**独立实现**，仅借鉴「Linux + Caddy 栈管理」的产品思想，**不**基于 GPL 源码改写。  
-- **主命令**：`lckit`
+- **License**: Apache License 2.0
+- **Implementation note**: Independent implementation. Product ideas only; **not** derived from GPL sources.
+- **CLI**: `lckit`
 
-## 功能
+Chinese docs: [README_CN.md](README_CN.md) · Guides: [docs/](docs/README.md)
 
-| 能力 | 命令 |
-|------|------|
-| 交互安装栈 | `lckit setup` |
-| **安装后补装** MariaDB / PostgreSQL | `lckit db install mariadb\|postgresql` |
-| **安装后补装** PHP-FPM | `lckit php install` |
-| 站点（static / php / proxy） | `lckit site add\|list\|show\|rm` |
-| 后端应用 systemd 单元 | `lckit app add\|list\|rm\|start\|stop\|restart\|status` |
-| 镜像源 | `lckit mirror show\|set\|apply\|list` |
-| 环境体检 | `lckit doctor` |
+## Features
 
-安装 Caddy 后会自动创建默认静态欢迎站：`/data/web/default`。
+| Capability | Command |
+|------------|---------|
+| Interactive stack setup | `lckit setup` |
+| Install MariaDB / PostgreSQL **after** setup | `lckit db install mariadb\|postgresql` |
+| Install PHP-FPM **after** setup | `lckit php install` |
+| PHP extensions | `lckit php ext install ...` |
+| Sites (static / php / proxy) | `lckit site add\|list\|show\|rm` |
+| Backend systemd units | `lckit app add\|list\|rm\|start\|stop\|restart\|status` |
+| Package mirrors | `lckit mirror show\|set\|apply\|list` |
+| Environment health check | `lckit doctor` |
 
-## 支持系统
+After installing Caddy, a default static welcome site is created at `/data/web/default`.
 
-- Enterprise Linux 8 / 9 / 10  
-- Debian 11 / 12 / 13  
-- Ubuntu 22.04 / 24.04  
+## Supported systems
 
-需要 root 与互联网。
+- Enterprise Linux 8 / 9 / 10
+- Debian 11 / 12 / 13
+- Ubuntu 22.04 / 24.04
 
-## 安装
+Requires root and internet access.
+
+## Install
 
 ```bash
 git clone https://github.com/houseme/lckit-apache.git
@@ -37,89 +40,66 @@ chmod +x lckit
 sudo ./lckit setup
 ```
 
-安装结束后 CLI 位于 `/usr/local/bin/lckit`。
+The CLI is installed to `/usr/local/bin/lckit`.
 
-## 安装后补装数据库 / PHP
+## Add databases / PHP later
 
-首次 `setup` 只装了 Caddy 也没关系：
+You can skip DB/PHP during first setup:
 
 ```bash
-sudo lckit db install mariadb                 # 默认 11.4，随机强密码
-sudo lckit db install mariadb --series 11.8
-sudo lckit db install postgresql              # PostgreSQL 18
+sudo lckit db install mariadb
+sudo lckit db install postgresql
 sudo lckit php install --version 8.4
+sudo lckit php ext install common redis imagick
 
 lckit db status
 lckit php status
 lckit doctor
 ```
 
-- 省略 `--password` 时生成随机密码，存放在 `/var/lib/lckit/secrets/`（`0700`/`0600`）
-- 数据库仅监听 `127.0.0.1`
-- 已对 MariaDB buffer pool、PostgreSQL `shared_buffers`、PHP-FPM `pm`/opcache 按内存做基础调优
+- Omit `--password` to generate a strong random secret under `/var/lib/lckit/secrets/` (`0700`/`0600`)
+- Databases listen on `127.0.0.1` only
+- Basic memory-based tuning for MariaDB / PostgreSQL / PHP-FPM / opcache
 
-## 快速开始
-
-### 默认静态站
-
-`setup` 且勾选 Caddy 后访问 `http://服务器IP`，应看到 LCKit 默认页。
-
-### 静态业务站
+## Quick start
 
 ```bash
-sudo lckit site add -d example.com -t static
-```
+# Static site (custom docroot)
+sudo lckit site add -d example.com -t static -r /data/web/example.com
 
-### Go / Rust 反向代理
-
-```bash
+# Go / Rust reverse proxy
 sudo lckit app  add --name api --bin /opt/api/api --port 8080 --workdir /opt/api
 sudo lckit site add -d api.example.com -t proxy --upstream http://127.0.0.1:8080
-```
 
-内网无证书：
-
-```bash
-sudo lckit site add -d panel.lan -t proxy --upstream http://127.0.0.1:8443 --no-tls
-```
-
-### PHP
-
-```bash
-# setup 时勾选 PHP，或自行安装 PHP-FPM 后：
+# PHP site
 sudo lckit site add -d blog.example.com -t php
-```
 
-### 国内镜像
-
-```bash
+# China mirror
 sudo lckit mirror set tuna
-lckit mirror show
 ```
 
-可选：`official` / `tuna` / `aliyun` / `ustc`。
-
-## 仓库结构
+## Repository layout
 
 ```
 lckit-apache/
-├── lckit                 # CLI 入口
-├── lib/                  # 模块（core/os/mirrors/web/db/php/sites/apps/ui）
-├── share/default-site/   # Caddy 默认静态页
-├── docs/sites.md         # site/app 详细说明
-├── LICENSE               # Apache-2.0
-└── README.md
+├── lckit                 # CLI entry
+├── lib/                  # modules
+├── share/default-site/   # default static page
+├── docs/                 # bilingual usage guides
+├── README.md             # this file (English)
+├── README_CN.md          # Chinese README
+└── LICENSE               # Apache-2.0
 ```
 
-## 设计说明（与 GPL 项目的关系）
+## Design note (GPL relationship)
 
-本仓库从零实现安装与管理流程，模块划分、路径约定、索引格式与命令语义均为独立设计。功能目标（Caddy 反代栈、可选数据库、镜像切换）属于产品思想，不受版权保护；实现代码以 Apache-2.0 发布。
+This repository reimplements install/management flows from scratch. Module layout, paths, index formats, and command semantics are independently designed. Product goals (Caddy reverse-proxy stack, optional databases, mirror switching) are ideas, not copyrightable expression. Code is released under Apache-2.0.
 
-**不**复制、不改写任何 GPL 许可的第三方安装脚本源码。若你从其他实现迁移，请勿将 GPL 文件放入本仓库。
+Do **not** copy GPL-licensed third-party installer sources into this repository.
 
-## 致谢
+## Thanks
 
-社区中存在多种「Web 栈一键安装」思路（例如将 Caddy 与数据库/运行时组合部署的公开项目）。LCKit 以独立实现方式提供类似目标能力，并尊重所有上游项目的许可证。特别感谢 Caddy、MariaDB、PostgreSQL、PHP 等开源生态。
+Thanks to the broader open-source ecosystem — Caddy, MariaDB, PostgreSQL, PHP, and community “web stack installer” ideas.
 
 ## License
 

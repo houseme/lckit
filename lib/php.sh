@@ -202,7 +202,18 @@ php_tune_deb() {
     sed -i "s/^;*listen.mode\s*=.*/listen.mode = 0660/" "${conf}"
   fi
   if grep -qE '^;?listen.acl_users' "${conf}"; then
-    sed -i "s/^;*listen.acl_users\s*=.*/listen.acl_users = caddy,nginx,apache,${user}/" "${conf}"
+    # Only list accounts that actually exist — PHP-FPM fails to start otherwise.
+    local acl=""
+    local u
+    for u in caddy www-data nginx apache "${user}"; do
+      id "${u}" >/dev/null 2>&1 || continue
+      case ",${acl}," in
+        *",${u},"*) continue ;;
+      esac
+      acl="${acl:+${acl},}${u}"
+    done
+    [[ -n "${acl}" ]] || acl="${user}"
+    sed -i "s/^;*listen.acl_users\s*=.*/listen.acl_users = ${acl}/" "${conf}"
   fi
   # Ubuntu default listen path is versioned — keep it, detect later
   if grep -qE '^;?listen\s*=' "${conf}"; then
