@@ -91,12 +91,6 @@ lckit-apache/
 └── LICENSE               # Apache-2.0
 ```
 
-## Design note (GPL relationship)
-
-This repository reimplements install/management flows from scratch. Module layout, paths, index formats, and command semantics are independently designed. Product goals (Caddy reverse-proxy stack, optional databases, mirror switching) are ideas, not copyrightable expression. Code is released under Apache-2.0.
-
-Do **not** copy GPL-licensed third-party installer sources into this repository.
-
 ## Thanks
 
 Thanks to the broader open-source ecosystem — Caddy, MariaDB, PostgreSQL, PHP, and community “web stack installer” ideas.
