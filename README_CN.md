@@ -6,7 +6,7 @@
 - **实现声明**：本仓库为**独立实现**，仅借鉴「Linux + Caddy 栈管理」的产品思想，**不**基于 GPL 源码改写。  
 - **主命令**：`lckit`
 
-English README: [README.md](README.md) · 使用指南: [docs/README.md](docs/README.md)
+English README: [README.md](README.md) · 使用指南: [docs/README.md](docs/README.md) · [中文指南索引](docs/zh/README.md)
 
 ## 功能
 
