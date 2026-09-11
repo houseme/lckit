@@ -21,6 +21,16 @@ php_load_state() {
 }
 
 php_detect_socket() {
+  # Prefer live sockets on disk (Ubuntu/ondrej uses /run/php/phpX.Y-fpm.sock)
+  local s
+  if [[ -d /run/php ]]; then
+    # newest versioned socket first
+    s="$(ls -1 /run/php/*.sock 2>/dev/null | sort -V | tail -n1 || true)"
+    if [[ -n "${s}" && -S "${s}" ]]; then
+      echo "unix//${s}"
+      return 0
+    fi
+  fi
   if [[ -S /run/php/php-fpm.sock ]]; then
     echo "unix//run/php/php-fpm.sock"
     return 0
@@ -71,12 +81,18 @@ php_install() {
       "php${ver}-mysql" "php${ver}-pgsql" "php${ver}-gd" "php${ver}-mbstring" \
       "php${ver}-xml" "php${ver}-curl" "php${ver}-intl" "php${ver}-zip" "php${ver}-sqlite3"
     PHP_FPM_UNIT="php${ver}-fpm"
-    PHP_SOCKET="unix//run/php/php-fpm.sock"
+    PHP_SOCKET="unix//run/php/php${ver}-fpm.sock"
     php_tune_deb "${ver}"
+    # Resolve the real socket after tune/restart
+    PHP_SOCKET="$(php_detect_socket)"
+    php_save_state "${ver}"
   fi
 
   run "systemctl enable --now ${PHP_FPM_UNIT}"
   try "systemctl restart ${PHP_FPM_UNIT}"
+  sleep 1
+  # Re-detect socket after FPM is up (Ubuntu uses phpX.Y-fpm.sock)
+  PHP_SOCKET="$(php_detect_socket)"
   php_save_state "${ver}"
   info "PHP ${ver} ready (unit=${PHP_FPM_UNIT}, socket=${PHP_SOCKET})"
 }
@@ -172,6 +188,23 @@ php_tune_deb() {
   [[ -f "${conf}" ]] || return 0
   sed -i "s/^user = .*/user = ${user}/" "${conf}"
   sed -i "s/^group = .*/group = ${user}/" "${conf}"
+  # Allow Caddy (or pool user) to connect to the FPM socket
+  if grep -qE '^;?listen.owner' "${conf}"; then
+    sed -i "s/^;*listen.owner\s*=.*/listen.owner = ${user}/" "${conf}"
+  fi
+  if grep -qE '^;?listen.group' "${conf}"; then
+    sed -i "s/^;*listen.group\s*=.*/listen.group = ${user}/" "${conf}"
+  fi
+  if grep -qE '^;?listen.mode' "${conf}"; then
+    sed -i "s/^;*listen.mode\s*=.*/listen.mode = 0660/" "${conf}"
+  fi
+  if grep -qE '^;?listen.acl_users' "${conf}"; then
+    sed -i "s/^;*listen.acl_users\s*=.*/listen.acl_users = caddy,nginx,apache,${user}/" "${conf}"
+  fi
+  # Ubuntu default listen path is versioned — keep it, detect later
+  if grep -qE '^;?listen\s*=' "${conf}"; then
+    sed -i "s|^;*listen\s*=.*|listen = /run/php/php${ver}-fpm.sock|" "${conf}"
+  fi
   mkdir -p /var/lib/lckit/php/session /var/lib/lckit/php/cache
   chown -R "${user}:${user}" /var/lib/lckit/php 2>/dev/null || true
   chmod 750 /var/lib/lckit/php /var/lib/lckit/php/session /var/lib/lckit/php/cache 2>/dev/null || true
@@ -344,7 +377,12 @@ php_ext_is_loaded() {
   if [[ -n "${ver}" ]] && have "php${ver}"; then
     bin="php${ver}"
   fi
-  "${bin}" -m 2>/dev/null | grep -qiE "^${ext}$"
+  # opcache appears as "Zend OPcache" in php -m
+  local pattern="^${ext}$"
+  if [[ "${ext}" == "opcache" ]]; then
+    pattern='^(Zend OPcache|opcache)$'
+  fi
+  "${bin}" -m 2>/dev/null | grep -qiE "${pattern}"
 }
 
 php_ext_bundle_common() {
