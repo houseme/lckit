@@ -1,5 +1,6 @@
 # LCKit database installers (MariaDB / PostgreSQL)
 # SPDX-License-Identifier: Apache-2.0
+# Repository: https://github.com/houseme/lckit
 
 # Persist last install metadata
 db_mark_installed() {
@@ -279,6 +280,8 @@ Notes:
   - If --password is omitted, a strong random password is generated
     and stored under /var/lib/lckit/secrets/ (mode 0600).
   - Databases listen on localhost only.
+
+Repository: https://github.com/houseme/lckit
 EOF
       ;;
     *)

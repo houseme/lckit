@@ -1,5 +1,6 @@
 # LCKit PHP-FPM installer
 # SPDX-License-Identifier: Apache-2.0
+# Repository: https://github.com/houseme/lckit
 
 # Globals filled by php_install; also persisted for later site add
 PHP_FPM_UNIT=""
@@ -670,6 +671,8 @@ Notes:
   - xcache / eaccelerator are obsolete (PHP 5) and skipped on modern PHP.
   - ionCube / SourceGuardian require their official loaders; install is best-effort.
   - fileinfo/iconv/pdo/etc. are often already bundled — install is a no-op if loaded.
+
+Repository: https://github.com/houseme/lckit
 EOF
       ;;
     *)
@@ -721,6 +724,8 @@ Usage: lckit php <install|ext|status>
 
 After install, create a PHP site:
   lckit site add -d blog.example.com -t php
+
+Repository: https://github.com/houseme/lckit
 EOF
       ;;
     *)

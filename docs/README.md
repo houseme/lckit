@@ -3,7 +3,7 @@
 **English** · [中文](zh/README.md)
 
 Complete English handbook for **LCKit** (Linux + Caddy Kit).  
-Repository: [https://github.com/houseme/lckit-apache](https://github.com/houseme/lckit-apache) · License: Apache-2.0
+Repository: [https://github.com/houseme/lckit](https://github.com/houseme/lckit) · License: Apache-2.0
 
 ---
 
@@ -41,8 +41,8 @@ Longer notes on sites/apps: [sites.md](sites.md)
 ## Install
 
 ```bash
-git clone https://github.com/houseme/lckit-apache.git
-cd lckit-apache
+git clone https://github.com/houseme/lckit.git
+cd lckit
 chmod +x lckit
 sudo ./lckit setup
 ```
@@ -229,4 +229,4 @@ ss -tlnp
 ## Language / 语言
 
 - 中文首页：[zh/README.md](zh/README.md)
-- Repository: [https://github.com/houseme/lckit-apache](https://github.com/houseme/lckit-apache)
+- Repository: [https://github.com/houseme/lckit](https://github.com/houseme/lckit)

@@ -1,6 +1,9 @@
 # LCKit core helpers
 # SPDX-License-Identifier: Apache-2.0
+# Repository: https://github.com/houseme/lckit
 
+: "${LCKIT_REPO:=https://github.com/houseme/lckit}"
+: "${LCKIT_LICENSE:=Apache-2.0}"
 : "${LCKIT_STATE:=/var/lib/lckit}"
 : "${LCKIT_LOG:=/var/log/lckit.log}"
 : "${LCKIT_ETC:=/etc/lckit}"

@@ -1,5 +1,6 @@
 # LCKit Caddy web front-end
 # SPDX-License-Identifier: Apache-2.0
+# Repository: https://github.com/houseme/lckit
 
 web_install_caddy() {
   if os_is_rhel; then

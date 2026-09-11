@@ -1,5 +1,6 @@
 # LCKit backend application units (Go / Rust / any HTTP binary)
 # SPDX-License-Identifier: Apache-2.0
+# Repository: https://github.com/houseme/lckit
 
 : "${APPS_INDEX:=${LCKIT_STATE}/apps.tsv}"
 
@@ -147,6 +148,8 @@ Usage: lckit app <add|list|rm|start|stop|restart|status>
   lckit app list
   lckit app rm <name>
   lckit app start|stop|restart|status <name>
+
+Repository: https://github.com/houseme/lckit
 EOF
 }
 

@@ -2,6 +2,7 @@
 # LCKit — Linux + Caddy Kit
 # Independent implementation. Idea inspiration only; not derived from GPL sources.
 # SPDX-License-Identifier: Apache-2.0
+# Repository: https://github.com/houseme/lckit
 set -euo pipefail
 
 LCKIT_HOME="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -63,6 +64,9 @@ Examples:
   lckit site add -d blog.example.com -t php
   lckit app  add --name api --bin /opt/api/api --port 8080
   lckit site add -d api.example.com -t proxy --upstream http://127.0.0.1:8080
+
+Repository: https://github.com/houseme/lckit
+License:    Apache-2.0
 EOF
 }
 

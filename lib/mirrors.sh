@@ -1,5 +1,6 @@
 # LCKit package mirror profiles
 # SPDX-License-Identifier: Apache-2.0
+# Repository: https://github.com/houseme/lckit
 
 MIRROR_FILE="${LCKIT_ETC}/mirror.conf"
 MIRROR_BACKUP="${LCKIT_STATE}/mirror-backup"
@@ -241,6 +242,18 @@ cmd_mirror() {
         "tuna      https://mirrors.tuna.tsinghua.edu.cn" \
         "aliyun    https://mirrors.aliyun.com" \
         "ustc      https://mirrors.ustc.edu.cn"
+      ;;
+    help|-h|--help)
+      cat <<'EOF'
+Usage: lckit mirror <show|set|apply|list>
+
+  lckit mirror show
+  lckit mirror set official|tuna|aliyun|ustc
+  lckit mirror apply
+  lckit mirror list
+
+Repository: https://github.com/houseme/lckit
+EOF
       ;;
     *)
       die "usage: lckit mirror show|set|apply|list"

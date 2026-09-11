@@ -3,7 +3,7 @@
 [English](../en/README.md) · **中文**
 
 Linux + Caddy Kit 命令手册。  
-仓库：[https://github.com/houseme/lckit-apache](https://github.com/houseme/lckit-apache)
+仓库：[https://github.com/houseme/lckit](https://github.com/houseme/lckit)
 
 ---
 
@@ -27,8 +27,8 @@ Linux + Caddy Kit 命令手册。
 ## 安装
 
 ```bash
-git clone https://github.com/houseme/lckit-apache.git
-cd lckit-apache
+git clone https://github.com/houseme/lckit.git
+cd lckit
 chmod +x lckit
 sudo ./lckit setup
 ```

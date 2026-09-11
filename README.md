@@ -34,8 +34,8 @@ Requires root and internet access.
 ## Install
 
 ```bash
-git clone https://github.com/houseme/lckit-apache.git
-cd lckit-apache
+git clone https://github.com/houseme/lckit.git
+cd lckit
 chmod +x lckit
 sudo ./lckit setup
 ```
@@ -81,7 +81,7 @@ sudo lckit mirror set tuna
 ## Repository layout
 
 ```
-lckit-apache/
+lckit/
 ├── lckit                 # CLI entry
 ├── lib/                  # modules
 ├── share/default-site/   # default static page

@@ -1,5 +1,6 @@
 # LCKit interactive setup & doctor
 # SPDX-License-Identifier: Apache-2.0
+# Repository: https://github.com/houseme/lckit
 
 _ask_yn() {
   local prompt="$1" default="$2"

@@ -1,5 +1,6 @@
 # LCKit site (vhost) management
 # SPDX-License-Identifier: Apache-2.0
+# Repository: https://github.com/houseme/lckit
 
 : "${SITES_INDEX:=${LCKIT_STATE}/sites.tsv}"
 
@@ -248,6 +249,8 @@ Usage: lckit site <add|list|show|rm> ...
   lckit site list
   lckit site show <domain>
   lckit site rm <domain>
+
+Repository: https://github.com/houseme/lckit
 EOF
 }
 

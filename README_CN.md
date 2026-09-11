@@ -34,8 +34,8 @@ English: [README.md](README.md) · 文档：[docs/zh/README.md](docs/zh/README.m
 ## 安装
 
 ```bash
-git clone https://github.com/houseme/lckit-apache.git
-cd lckit-apache
+git clone https://github.com/houseme/lckit.git
+cd lckit
 chmod +x lckit
 sudo ./lckit setup
 ```
@@ -79,7 +79,7 @@ sudo lckit mirror set tuna
 ## 仓库结构
 
 ```
-lckit-apache/
+lckit/
 ├── lckit                 # CLI 入口
 ├── lib/                  # 模块
 ├── share/default-site/   # Caddy 默认静态页

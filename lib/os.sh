@@ -1,5 +1,6 @@
 # LCKit OS detection & system prepare
 # SPDX-License-Identifier: Apache-2.0
+# Repository: https://github.com/houseme/lckit
 
 os_id() {
   awk -F= '/^ID=/{gsub(/"/,"",$2); print $2}' /etc/os-release 2>/dev/null || true
