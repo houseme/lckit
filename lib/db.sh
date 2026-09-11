@@ -235,8 +235,12 @@ cmd_db() {
       local engine="" series="11.4" password=""
       while [[ $# -gt 0 ]]; do
         case "$1" in
-          mariadb|postgresql|postgres)
-            engine="${1/postgres/postgresql}"
+          mariadb)
+            engine="mariadb"
+            shift
+            ;;
+          postgresql|postgres)
+            engine="postgresql"
             shift
             ;;
           --series) series="${2:-11.4}"; shift 2 ;;
