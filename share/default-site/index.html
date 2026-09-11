@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LCKit · Linux + Caddy Kit</title>
+  <style>
+    :root {
+      --bg: #070b14;
+      --panel: #101827;
+      --ink: #edf2f7;
+      --muted: #8b9bb4;
+      --line: rgba(255,255,255,.08);
+      --blue: #4ea1ff;
+      --green: #34d399;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      color: var(--ink);
+      font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
+      background:
+        radial-gradient(900px 480px at 0% 0%, rgba(78,161,255,.16), transparent 55%),
+        radial-gradient(700px 420px at 100% 10%, rgba(52,211,153,.10), transparent 50%),
+        var(--bg);
+      display: grid;
+      place-items: center;
+      padding: 28px 16px;
+    }
+    .shell {
+      width: min(740px, 100%);
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 34px 30px 26px;
+      box-shadow: 0 24px 70px rgba(0,0,0,.4);
+    }
+    .pill {
+      display: inline-flex;
+      gap: 8px;
+      align-items: center;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      color: var(--green);
+      background: rgba(52,211,153,.12);
+      border: 1px solid rgba(52,211,153,.28);
+      border-radius: 999px;
+      padding: 4px 10px;
+      margin-bottom: 16px;
+    }
+    .pill i {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--green);
+      display: inline-block;
+    }
+    h1 { margin: 0 0 8px; font-size: 30px; letter-spacing: -.02em; }
+    .lead { margin: 0 0 22px; color: var(--muted); line-height: 1.65; }
+    .grid { display: grid; gap: 12px; }
+    @media (min-width: 640px) { .grid { grid-template-columns: 1fr 1fr; } }
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 14px;
+      background: rgba(255,255,255,.02);
+    }
+    .card h2 { margin: 0 0 6px; font-size: 14px; }
+    .card p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+    .cmd {
+      display: block;
+      margin-top: 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      color: #9ecbff;
+      background: #080d16;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 10px;
+      overflow-x: auto;
+      white-space: nowrap;
+    }
+    footer {
+      margin-top: 20px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 12px;
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+  </style>
+</head>
+<body>
+  <main class="shell">
+    <div class="pill"><i></i> Caddy online</div>
+    <h1>LCKit 默认站点</h1>
+    <p class="lead">
+      Linux + Caddy Kit 已部署。此页面是安装后的静态默认站，可继续创建业务站点或反向代理。
+    </p>
+    <div class="grid">
+      <section class="card">
+        <h2>静态站点</h2>
+        <p>托管前端构建产物或纯 HTML。</p>
+        <code class="cmd">lckit site add -d example.com -t static</code>
+      </section>
+      <section class="card">
+        <h2>HTTP 反向代理</h2>
+        <p>对接 Go / Rust / 任意本机 HTTP 服务，WebSocket 自动可用。</p>
+        <code class="cmd">lckit site add -d api.example.com -t proxy --upstream http://127.0.0.1:8080</code>
+      </section>
+      <section class="card">
+        <h2>应用 systemd</h2>
+        <p>把二进制注册为服务单元。</p>
+        <code class="cmd">lckit app add --name api --bin /opt/api/api --port 8080</code>
+      </section>
+      <section class="card">
+        <h2>镜像源</h2>
+        <p>official / tuna / aliyun / ustc，随时切换。</p>
+        <code class="cmd">lckit mirror set tuna</code>
+      </section>
+    </div>
+    <footer>
+      <span>根目录 /data/web/default</span>
+      <span>lckit doctor · Apache-2.0</span>
+    </footer>
+  </main>
+</body>
+</html>

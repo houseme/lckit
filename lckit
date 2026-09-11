@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# LCKit — Linux + Caddy Kit
+# Independent implementation. Idea inspiration only; not derived from GPL sources.
+# SPDX-License-Identifier: Apache-2.0
+set -euo pipefail
+
+LCKIT_HOME="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+export LCKIT_HOME
+# shellcheck source=lib/core.sh
+source "${LCKIT_HOME}/lib/core.sh"
+source "${LCKIT_HOME}/lib/os.sh"
+source "${LCKIT_HOME}/lib/mirrors.sh"
+source "${LCKIT_HOME}/lib/web.sh"
+source "${LCKIT_HOME}/lib/db.sh"
+source "${LCKIT_HOME}/lib/php.sh"
+source "${LCKIT_HOME}/lib/sites.sh"
+source "${LCKIT_HOME}/lib/apps.sh"
+source "${LCKIT_HOME}/lib/ui.sh"
+
+usage() {
+  cat <<'EOF'
+LCKit — Linux + Caddy Kit
+
+Usage:
+  lckit setup              Interactive stack setup
+  lckit site <cmd>         Manage sites (static | php | proxy)
+  lckit app  <cmd>         Manage backend app units (Go/Rust/any HTTP binary)
+  lckit mirror <cmd>       Show or switch package mirrors
+  lckit doctor             Print environment summary
+  lckit help               This help
+
+Site commands:
+  lckit site add -d example.com -t static|php|proxy [options]
+  lckit site list
+  lckit site show <domain>
+  lckit site rm  <domain>
+
+App commands:
+  lckit app add --name api --bin /opt/api/api --port 8080
+  lckit app list
+  lckit app rm <name>
+  lckit app start|stop|restart|status <name>
+
+Mirror commands:
+  lckit mirror show
+  lckit mirror set official|tuna|aliyun|ustc
+  lckit mirror apply
+
+Examples:
+  lckit setup
+  lckit app  add --name api --bin /opt/api/api --port 8080
+  lckit site add -d api.example.com -t proxy --upstream http://127.0.0.1:8080
+  lckit mirror set tuna
+EOF
+}
+
+main() {
+  local cmd="${1:-help}"
+  shift || true
+  case "${cmd}" in
+    setup|install)
+      cmd_setup "$@"
+      ;;
+    site)
+      cmd_site "$@"
+      ;;
+    app)
+      cmd_app "$@"
+      ;;
+    mirror)
+      cmd_mirror "$@"
+      ;;
+    doctor|status)
+      cmd_doctor "$@"
+      ;;
+    help|-h|--help)
+      usage
+      ;;
+    *)
+      usage >&2
+      return 1
+      ;;
+  esac
+}
+
+main "$@"

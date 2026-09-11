@@ -1,0 +1,126 @@
+# LCKit
+
+**LCKit**（Linux + Caddy Kit）是一款模块化 Bash 工具：以 [Caddy](https://caddyserver.com) 为反向代理 / TLS / 静态站前端，可选安装 MariaDB、PHP-FPM、PostgreSQL 18，并提供 Go / Rust 等 HTTP 后端的应用单元与站点管理，支持国内公共镜像。
+
+- **协议**：Apache License 2.0  
+- **实现声明**：本仓库为**独立实现**，仅借鉴「Linux + Caddy 栈管理」的产品思想，**不**基于 GPL 源码改写。  
+- **主命令**：`lckit`
+
+## 功能
+
+| 能力 | 命令 |
+|------|------|
+| 交互安装栈 | `lckit setup` |
+| 站点（static / php / proxy） | `lckit site add\|list\|show\|rm` |
+| 后端应用 systemd 单元 | `lckit app add\|list\|rm\|start\|stop\|restart\|status` |
+| 镜像源 | `lckit mirror show\|set\|apply\|list` |
+| 环境体检 | `lckit doctor` |
+
+安装 Caddy 后会自动创建默认静态欢迎站：`/data/web/default`。
+
+## 支持系统
+
+- Enterprise Linux 8 / 9 / 10  
+- Debian 11 / 12 / 13  
+- Ubuntu 22.04 / 24.04  
+
+需要 root 与互联网。
+
+## 安装
+
+```bash
+git clone https://github.com/houseme/lckit-apache.git
+cd lckit-apache
+chmod +x lckit
+sudo ./lckit setup
+```
+
+安装结束后 CLI 位于 `/usr/local/bin/lckit`。
+
+也可直接用仓库内入口（需先 `setup` 或具备依赖）：
+
+```bash
+sudo ./lckit setup
+./lckit doctor
+```
+
+## 快速开始
+
+### 默认静态站
+
+`setup` 且勾选 Caddy 后访问 `http://服务器IP`，应看到 LCKit 默认页。
+
+### 静态业务站
+
+```bash
+sudo lckit site add -d example.com -t static
+```
+
+### Go / Rust 反向代理
+
+```bash
+sudo lckit app  add --name api --bin /opt/api/api --port 8080 --workdir /opt/api
+sudo lckit site add -d api.example.com -t proxy --upstream http://127.0.0.1:8080
+```
+
+内网无证书：
+
+```bash
+sudo lckit site add -d panel.lan -t proxy --upstream http://127.0.0.1:8443 --no-tls
+```
+
+### PHP
+
+```bash
+# setup 时勾选 PHP，或自行安装 PHP-FPM 后：
+sudo lckit site add -d blog.example.com -t php
+```
+
+### 国内镜像
+
+```bash
+sudo lckit mirror set tuna
+lckit mirror show
+```
+
+可选：`official` / `tuna` / `aliyun` / `ustc`。
+
+## 仓库结构
+
+```
+lckit-apache/
+├── lckit                 # CLI 入口
+├── lib/                  # 模块（core/os/mirrors/web/db/php/sites/apps/ui）
+├── share/default-site/   # Caddy 默认静态页
+├── docs/sites.md         # site/app 详细说明
+├── LICENSE               # Apache-2.0
+└── README.md
+```
+
+## 设计说明（与 GPL 项目的关系）
+
+本仓库从零实现安装与管理流程，模块划分、路径约定、索引格式与命令语义均为独立设计。功能目标（Caddy 反代栈、可选数据库、镜像切换）属于产品思想，不受版权保护；实现代码以 Apache-2.0 发布。
+
+**不**复制、不改写任何 GPL 许可的第三方安装脚本源码。若你从其他实现迁移，请勿将 GPL 文件放入本仓库。
+
+## 致谢
+
+社区中存在多种「Web 栈一键安装」思路（例如将 Caddy 与数据库/运行时组合部署的公开项目）。LCKit 以独立实现方式提供类似目标能力，并尊重所有上游项目的许可证。特别感谢 Caddy、MariaDB、PostgreSQL、PHP 等开源生态。
+
+## License
+
+```
+Copyright 2026 LCKit contributors
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+```
