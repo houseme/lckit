@@ -1,5 +1,7 @@
 # lckit mirror — Package mirrors
 
+[← Back to docs home](README.md) · [中文](../zh/mirror.md)
+
 Show or switch package-manager mirrors (official / China public mirrors).
 
 ## Subcommands

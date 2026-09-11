@@ -1,5 +1,7 @@
 # lckit php ext — PHP extensions
 
+[← Back to docs home](README.md) · [中文](../zh/php-ext.md)
+
 Install common PHP extensions (redis, opcache, imagick, swoole, …).
 
 ## Subcommands

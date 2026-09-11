@@ -1,5 +1,7 @@
 # LCKit site & app 指南
 
+[← 返回文档首页](zh/README.md) · [English](en/README.md)
+
 ## 站点类型
 
 | 类型 | 用途 | 关键参数 |

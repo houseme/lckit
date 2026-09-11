@@ -1,5 +1,7 @@
 # lckit db — Database install & status
 
+[← Back to docs home](README.md) · [中文](../zh/db.md)
+
 Install MariaDB or PostgreSQL **after** `setup`, or inspect status.
 
 ## Subcommands

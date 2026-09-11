@@ -1,5 +1,7 @@
 # lckit mirror — 软件源镜像
 
+[← 返回文档首页](README.md) · [English](../en/mirror.md)
+
 查看或切换包管理镜像（官方 / 国内公共镜像）。
 
 ## 子命令

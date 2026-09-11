@@ -1,5 +1,7 @@
 # lckit php ext — PHP 扩展
 
+[← 返回文档首页](README.md) · [English](../en/php-ext.md)
+
 安装常见 PHP 扩展（redis、opcache、imagick、swoole 等）。
 
 ## 子命令

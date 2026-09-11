@@ -1,5 +1,7 @@
 # lckit doctor — 环境体检
 
+[← 返回文档首页](README.md) · [English](../en/doctor.md)
+
 打印主机、镜像、服务、组件、站点与应用的摘要。
 
 ## 用法

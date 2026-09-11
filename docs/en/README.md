@@ -1,11 +1,30 @@
-# LCKit Docs (English)
+# LCKit Docs
 
-> Language: [English](README.md) · [中文](../zh/README.md) · [Bilingual hub](../README.md)
+**English** · [中文](../zh/README.md)
 
-Command documentation for **LCKit** (Linux + Caddy Kit).  
-Project README: [../../README.md](../../README.md).
+Command handbook for Linux + Caddy Kit.  
+Project: [README.md](../../README.md)
 
-## Quick start
+---
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| [lckit setup](setup.md) | Interactive Caddy install; optional DB / PHP |
+| [lckit site](site.md) | Static, PHP, and reverse-proxy sites |
+| [lckit app](app.md) | Systemd units for Go / Rust / any binary |
+| [lckit db](db.md) | Install or inspect MariaDB, PostgreSQL |
+| [lckit php](php.md) | Install or inspect PHP-FPM |
+| [lckit php ext](php-ext.md) | PHP extensions (redis, imagick, swoole, …) |
+| [lckit mirror](mirror.md) | Official / TUNA / Aliyun / USTC mirrors |
+| [lckit doctor](doctor.md) | Environment health check |
+
+More notes: [sites.md](../sites.md)
+
+---
+
+## Install
 
 ```bash
 git clone https://github.com/houseme/lckit-apache.git
@@ -14,49 +33,44 @@ chmod +x lckit
 sudo ./lckit setup
 ```
 
-## Command guides
+After setup the CLI is `lckit` (`/usr/local/bin/lckit`).
 
-| Command | Description | Link |
-|---------|-------------|------|
-| `lckit setup` | Interactive Caddy / optional DB / PHP install | [setup.md](setup.md) |
-| `lckit site` | Static / PHP / reverse-proxy sites | [site.md](site.md) |
-| `lckit app` | Backend binary systemd units | [app.md](app.md) |
-| `lckit db` | MariaDB & PostgreSQL install/status | [db.md](db.md) |
-| `lckit php` | PHP-FPM install/status | [php.md](php.md) |
-| `lckit php ext` | PHP extensions | [php-ext.md](php-ext.md) |
-| `lckit mirror` | Package mirror switching | [mirror.md](mirror.md) |
-| `lckit doctor` | Environment health check | [doctor.md](doctor.md) |
+---
 
-Extra notes: [../sites.md](../sites.md)
+## Common flows
 
-## Suggested install order
-
-1. `lckit setup` (at least Caddy)  
-2. Databases when needed: `lckit db install mariadb` / `postgresql`  
-3. PHP when needed: `lckit php install` → `lckit php ext install ...`  
-4. `lckit site add ...` / `lckit app add ...`  
-5. On issues: `lckit doctor`
-
-## Common recipes
+**Reverse proxy only**
 
 ```bash
-# Static site with custom docroot
-sudo lckit site add -d demo.example.com -t static -r /data/rustfs/demo.example.com
-
-# Go/Rust reverse proxy
+sudo lckit setup
 sudo lckit app  add --name api --bin /opt/api/api --port 8080
 sudo lckit site add -d api.example.com -t proxy --upstream http://127.0.0.1:8080
+```
 
-# PHP + common extensions
+**Static site (custom root)**
+
+```bash
+sudo lckit site add -d demo.example.com -t static -r /data/rustfs/demo.example.com
+```
+
+**Add DB and PHP later**
+
+```bash
+sudo lckit db  install mariadb
 sudo lckit php install --version 8.4
 sudo lckit php ext install common redis imagick
 sudo lckit site add -d blog.example.com -t php
+```
 
-# China mirrors
+**China mirrors**
+
+```bash
 sudo lckit mirror set tuna
 ```
 
-## Path cheat sheet
+---
+
+## Paths
 
 | Item | Path |
 |------|------|
@@ -67,14 +81,13 @@ sudo lckit mirror set tuna
 | Default site | `/data/web/default` |
 | Log | `/var/log/lckit.log` |
 
-## Troubleshooting entry points
+---
+
+## Troubleshooting
 
 ```bash
 lckit doctor
 lckit site list
-lckit app list
 systemctl status caddy
 journalctl -u caddy -n 50 --no-pager
 ```
-
-License: Apache-2.0.

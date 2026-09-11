@@ -1,5 +1,7 @@
 # lckit site — 虚拟主机
 
+[← 返回文档首页](README.md) · [English](../en/site.md)
+
 管理静态 / PHP / 反向代理站点。配置写入 `/etc/caddy/sites/<域名>.caddy`。
 
 ## 子命令

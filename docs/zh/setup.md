@@ -1,5 +1,7 @@
 # lckit setup — 交互安装
 
+[← 返回文档首页](README.md) · [English](../en/setup.md)
+
 安装 LCKit 栈（Caddy + 可选数据库 / PHP）。
 
 ## 用法

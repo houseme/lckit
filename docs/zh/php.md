@@ -1,5 +1,7 @@
 # lckit php — PHP-FPM 安装与状态
 
+[← 返回文档首页](README.md) · [English](../en/php.md)
+
 ## 子命令
 
 ```bash

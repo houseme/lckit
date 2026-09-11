@@ -1,5 +1,7 @@
 # lckit app — 后端应用单元
 
+[← 返回文档首页](README.md) · [English](../en/app.md)
+
 把 Go / Rust / 任意 HTTP 二进制注册为 systemd 服务，配合 `site add -t proxy` 使用。
 
 ## 子命令

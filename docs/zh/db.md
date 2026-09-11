@@ -1,5 +1,7 @@
 # lckit db — 数据库安装与状态
 
+[← 返回文档首页](README.md) · [English](../en/db.md)
+
 在 **setup 之后** 安装 MariaDB 或 PostgreSQL，或查看状态。
 
 ## 子命令

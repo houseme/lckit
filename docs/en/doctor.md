@@ -1,5 +1,7 @@
 # lckit doctor — Environment health check
 
+[← Back to docs home](README.md) · [中文](../zh/doctor.md)
+
 Prints a summary of host, mirror, services, components, sites, and apps.
 
 ## Usage

@@ -1,5 +1,7 @@
 # lckit setup — Interactive stack setup
 
+[← Back to docs home](README.md) · [中文](../zh/setup.md)
+
 Installs the LCKit stack (Caddy + optional databases / PHP).
 
 ## Usage

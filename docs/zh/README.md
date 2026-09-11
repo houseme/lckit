@@ -1,11 +1,30 @@
-# LCKit 文档（中文）
+# LCKit 文档
 
-> 语言切换：[English](../en/README.md) · **中文** · [双语总览](../README.md)
+[English](../en/README.md) · **中文**
 
-**LCKit**（Linux + Caddy Kit）命令文档。  
-项目说明见 [../../README_CN.md](../../README_CN.md)。
+Linux + Caddy Kit 命令手册。  
+项目说明：[README_CN.md](../../README_CN.md)
 
-## 快速开始
+---
+
+## 命令
+
+| 命令 | 说明 |
+|------|------|
+| [lckit setup](setup.md) | 交互安装 Caddy，可选数据库 / PHP |
+| [lckit site](site.md) | 静态站、PHP 站、反向代理 |
+| [lckit app](app.md) | Go / Rust 等后端 systemd 服务 |
+| [lckit db](db.md) | 安装或查看 MariaDB、PostgreSQL |
+| [lckit php](php.md) | 安装或查看 PHP-FPM |
+| [lckit php ext](php-ext.md) | PHP 扩展（redis、imagick、swoole 等） |
+| [lckit mirror](mirror.md) | 官方 / 清华 / 阿里云 / 中科大 镜像 |
+| [lckit doctor](doctor.md) | 环境体检 |
+
+补充说明：[sites.md](../sites.md)
+
+---
+
+## 安装
 
 ```bash
 git clone https://github.com/houseme/lckit-apache.git
@@ -14,49 +33,44 @@ chmod +x lckit
 sudo ./lckit setup
 ```
 
-## 命令文档
+装完后命令为 `lckit`（`/usr/local/bin/lckit`）。
 
-| 命令 | 说明 | 链接 |
-|------|------|------|
-| `lckit setup` | 交互安装 Caddy / 可选 DB / PHP | [setup.md](setup.md) |
-| `lckit site` | 静态 / PHP / 反向代理站点 | [site.md](site.md) |
-| `lckit app` | 后端二进制 systemd 管理 | [app.md](app.md) |
-| `lckit db` | MariaDB、PostgreSQL 安装与状态 | [db.md](db.md) |
-| `lckit php` | PHP-FPM 安装与状态 | [php.md](php.md) |
-| `lckit php ext` | PHP 扩展安装 | [php-ext.md](php-ext.md) |
-| `lckit mirror` | 软件源镜像切换 | [mirror.md](mirror.md) |
-| `lckit doctor` | 环境体检 | [doctor.md](doctor.md) |
+---
 
-补充：[../sites.md](../sites.md)
+## 常用流程
 
-## 安装顺序建议
-
-1. `lckit setup`（至少装 Caddy）  
-2. 需要数据库时：`lckit db install mariadb` / `postgresql`  
-3. 需要 PHP 时：`lckit php install` → `lckit php ext install ...`  
-4. `lckit site add ...` / `lckit app add ...`  
-5. 异常时：`lckit doctor`
-
-## 常用组合
+**只做反向代理**
 
 ```bash
-# 静态站 + 自定义目录
-sudo lckit site add -d demo.example.com -t static -r /data/rustfs/demo.example.com
-
-# Go/Rust 反代
+sudo lckit setup
 sudo lckit app  add --name api --bin /opt/api/api --port 8080
 sudo lckit site add -d api.example.com -t proxy --upstream http://127.0.0.1:8080
+```
 
-# PHP + 常用扩展
+**静态站（自定义目录）**
+
+```bash
+sudo lckit site add -d demo.example.com -t static -r /data/rustfs/demo.example.com
+```
+
+**后补数据库与 PHP**
+
+```bash
+sudo lckit db  install mariadb
 sudo lckit php install --version 8.4
 sudo lckit php ext install common redis imagick
 sudo lckit site add -d blog.example.com -t php
+```
 
-# 国内镜像
+**国内镜像**
+
+```bash
 sudo lckit mirror set tuna
 ```
 
-## 路径速查
+---
+
+## 路径
 
 | 项目 | 路径 |
 |------|------|
@@ -67,14 +81,13 @@ sudo lckit mirror set tuna
 | 默认站点 | `/data/web/default` |
 | 日志 | `/var/log/lckit.log` |
 
-## 排障入口
+---
+
+## 排障
 
 ```bash
 lckit doctor
 lckit site list
-lckit app list
 systemctl status caddy
 journalctl -u caddy -n 50 --no-pager
 ```
-
-协议：Apache-2.0。
