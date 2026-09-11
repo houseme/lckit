@@ -11,6 +11,8 @@
 | 能力 | 命令 |
 |------|------|
 | 交互安装栈 | `lckit setup` |
+| **安装后补装** MariaDB / PostgreSQL | `lckit db install mariadb\|postgresql` |
+| **安装后补装** PHP-FPM | `lckit php install` |
 | 站点（static / php / proxy） | `lckit site add\|list\|show\|rm` |
 | 后端应用 systemd 单元 | `lckit app add\|list\|rm\|start\|stop\|restart\|status` |
 | 镜像源 | `lckit mirror show\|set\|apply\|list` |
@@ -37,12 +39,24 @@ sudo ./lckit setup
 
 安装结束后 CLI 位于 `/usr/local/bin/lckit`。
 
-也可直接用仓库内入口（需先 `setup` 或具备依赖）：
+## 安装后补装数据库 / PHP
+
+首次 `setup` 只装了 Caddy 也没关系：
 
 ```bash
-sudo ./lckit setup
-./lckit doctor
+sudo lckit db install mariadb                 # 默认 11.4，随机强密码
+sudo lckit db install mariadb --series 11.8
+sudo lckit db install postgresql              # PostgreSQL 18
+sudo lckit php install --version 8.4
+
+lckit db status
+lckit php status
+lckit doctor
 ```
+
+- 省略 `--password` 时生成随机密码，存放在 `/var/lib/lckit/secrets/`（`0700`/`0600`）
+- 数据库仅监听 `127.0.0.1`
+- 已对 MariaDB buffer pool、PostgreSQL `shared_buffers`、PHP-FPM `pm`/opcache 按内存做基础调优
 
 ## 快速开始
 

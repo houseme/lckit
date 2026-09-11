@@ -10,7 +10,8 @@
 : "${CADDY_SITES:=/etc/caddy/sites}"
 : "${UNIT_DIR:=/etc/systemd/system}"
 : "${PG_MAJOR:=18}"
-: "${DB_DEFAULT_PASS:=ChangeMe.lckit}"
+# Passwords are generated at install time; this is only a last-resort fallback label.
+: "${DB_DEFAULT_PASS:=}"
 
 # shellcheck disable=SC2034
 LCKIT_VERSION="1.0.0"
@@ -107,6 +108,39 @@ require_cmd_name() {
 require_domain() {
   local d="$1"
   [[ "${d}" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$ ]]
+}
+
+secret_dir() {
+  echo "${LCKIT_STATE}/secrets"
+}
+
+secret_store() {
+  local name="$1" value="$2"
+  mkdir -p "$(secret_dir)"
+  chmod 700 "$(secret_dir)" 2>/dev/null || true
+  local f
+  f="$(secret_dir)/${name}"
+  printf '%s' "${value}" > "${f}"
+  chmod 600 "${f}" 2>/dev/null || true
+  # Never echo the secret
+  info "secret stored: ${f}"
+}
+
+secret_read() {
+  local name="$1"
+  local f
+  f="$(secret_dir)/${name}"
+  [[ -f "${f}" ]] || return 1
+  cat "${f}"
+}
+
+secret_generate() {
+  # 24-char url-safe secret
+  if have openssl; then
+    openssl rand -base64 24 | tr -d '=+/' | cut -c1-24
+  else
+    tr -dc 'A-Za-z0-9' </dev/urandom | head -c 24
+  fi
 }
 
 site_conf_path() {

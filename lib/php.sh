@@ -1,12 +1,42 @@
 # LCKit PHP-FPM installer
 # SPDX-License-Identifier: Apache-2.0
 
-# Globals filled by php_install
+# Globals filled by php_install; also persisted for later site add
 PHP_FPM_UNIT=""
 PHP_SOCKET=""
 
+php_save_state() {
+  ensure_base_dirs
+  printf 'PHP_FPM_UNIT=%s\nPHP_SOCKET=%s\nPHP_VERSION=%s\n' \
+    "${PHP_FPM_UNIT}" "${PHP_SOCKET}" "${1:-}" > "${LCKIT_STATE}/php"
+}
+
+php_load_state() {
+  if [[ -f "${LCKIT_STATE}/php" ]]; then
+    # shellcheck disable=SC1090
+    source "${LCKIT_STATE}/php" || true
+  fi
+}
+
+php_detect_socket() {
+  if [[ -S /run/php/php-fpm.sock ]]; then
+    echo "unix//run/php/php-fpm.sock"
+    return 0
+  fi
+  if [[ -S /run/php-fpm/www.sock ]]; then
+    echo "unix//run/php-fpm/www.sock"
+    return 0
+  fi
+  php_load_state
+  if [[ -n "${PHP_SOCKET:-}" ]]; then
+    echo "${PHP_SOCKET}"
+    return 0
+  fi
+  echo "unix//run/php/php-fpm.sock"
+}
+
 php_install() {
-  local ver="$1"
+  local ver="${1:-8.4}"
   PHP_FPM_UNIT=""
   PHP_SOCKET=""
 
@@ -44,6 +74,8 @@ php_install() {
   fi
 
   run "systemctl enable --now ${PHP_FPM_UNIT}"
+  try "systemctl restart ${PHP_FPM_UNIT}"
+  php_save_state "${ver}"
   info "PHP ${ver} ready (unit=${PHP_FPM_UNIT}, socket=${PHP_SOCKET})"
 }
 
@@ -57,6 +89,65 @@ _php_pool_user() {
   fi
 }
 
+_php_ini_hardening() {
+  local ini="$1"
+  [[ -f "${ini}" ]] || return 0
+  sed -i 's/^expose_php\s*=.*/expose_php = Off/' "${ini}"
+  sed -i 's/^upload_max_filesize\s*=.*/upload_max_filesize = 64M/' "${ini}"
+  sed -i 's/^post_max_size\s*=.*/post_max_size = 64M/' "${ini}"
+  sed -i 's/^max_execution_time\s*=.*/max_execution_time = 60/' "${ini}"
+  sed -i 's/^session.cookie_httponly\s*=.*/session.cookie_httponly = On/' "${ini}"
+  sed -i 's/^session.cookie_secure\s*=.*/session.cookie_secure = On/' "${ini}"
+  # Commented keys may need enabling
+  if grep -q '^;session.cookie_httponly' "${ini}"; then
+    sed -i 's/^;session.cookie_httponly\s*=.*/session.cookie_httponly = On/' "${ini}"
+  fi
+  if grep -q '^;session.cookie_secure' "${ini}"; then
+    sed -i 's/^;session.cookie_secure\s*=.*/session.cookie_secure = On/' "${ini}"
+  fi
+  # Dangerous functions — only set if disable_functions line exists (avoid duplicating)
+  if grep -qE '^;?disable_functions\s*=' "${ini}"; then
+    sed -i 's/^;*disable_functions\s*=.*/disable_functions = exec,passthru,shell_exec,system,proc_open,popen,curl_multi_exec,parse_ini_file,show_source/' "${ini}"
+  fi
+}
+
+_php_opcache_tune() {
+  local ini_dir="$1"  # e.g. /etc/php/8.4/fpm/conf.d or /etc/php.d
+  local f
+  f="$(ls "${ini_dir}"/*opcache*.ini 2>/dev/null | head -n1 || true)"
+  [[ -n "${f}" && -f "${f}" ]] || return 0
+  cat >> "${f}" <<'EOF'
+; LCKit opcache
+opcache.enable=1
+opcache.memory_consumption=128
+opcache.interned_strings_buffer=16
+opcache.max_accelerated_files=10000
+opcache.validate_timestamps=0
+EOF
+}
+
+_php_pool_performance() {
+  local conf="$1"
+  [[ -f "${conf}" ]] || return 0
+  # ondemand is lighter for small VPS; dynamic is fine for busier hosts
+  local mem_mb
+  mem_mb="$(awk '/MemTotal/{printf "%d", $2/1024}' /proc/meminfo 2>/dev/null || echo 512)"
+  if (( mem_mb < 1024 )); then
+    sed -i 's/^pm\s*=.*/pm = ondemand/' "${conf}" || true
+    sed -i 's/^pm.max_children\s*=.*/pm.max_children = 10/' "${conf}" || true
+  else
+    sed -i 's/^pm\s*=.*/pm = dynamic/' "${conf}" || true
+    sed -i 's/^pm.max_children\s*=.*/pm.max_children = 20/' "${conf}" || true
+    sed -i 's/^pm.start_servers\s*=.*/pm.start_servers = 4/' "${conf}" || true
+    sed -i 's/^pm.min_spare_servers\s*=.*/pm.min_spare_servers = 2/' "${conf}" || true
+    sed -i 's/^pm.max_spare_servers\s*=.*/pm.max_spare_servers = 8/' "${conf}" || true
+  fi
+  # Restrict pool listener if keys exist
+  if grep -q '^;listen.allowed_clients' "${conf}"; then
+    sed -i 's/^;listen.allowed_clients\s*=.*/listen.allowed_clients = 127.0.0.1/' "${conf}"
+  fi
+}
+
 php_tune_rhel() {
   local conf=/etc/php-fpm.d/www.conf
   local user
@@ -65,12 +156,9 @@ php_tune_rhel() {
   sed -i "s/^user = .*/user = ${user}/" "${conf}"
   sed -i "s/^group = .*/group = ${user}/" "${conf}"
   sed -i "s/^;listen.acl_users = .*/listen.acl_users = apache,nginx,caddy/" "${conf}"
-  local ini=/etc/php.ini
-  if [[ -f "${ini}" ]]; then
-    sed -i 's/^expose_php = .*/expose_php = Off/' "${ini}"
-    sed -i 's/^upload_max_filesize = .*/upload_max_filesize = 128M/' "${ini}"
-    sed -i 's/^post_max_size = .*/post_max_size = 128M/' "${ini}"
-  fi
+  _php_pool_performance "${conf}"
+  _php_ini_hardening /etc/php.ini
+  _php_opcache_tune /etc/php.d
 }
 
 php_tune_deb() {
@@ -84,13 +172,54 @@ php_tune_deb() {
   sed -i "s/^group = .*/group = ${user}/" "${conf}"
   mkdir -p /var/lib/lckit/php/{session,cache}
   chown -R "${user}:${user}" /var/lib/lckit/php 2>/dev/null || true
-  if [[ -f "${ini}" ]]; then
-    sed -i 's/^expose_php = .*/expose_php = Off/' "${ini}"
-    sed -i 's/^upload_max_filesize = .*/upload_max_filesize = 128M/' "${ini}"
-    sed -i 's/^post_max_size = .*/post_max_size = 128M/' "${ini}"
-  fi
-  # session path via pool extra
+  chmod 750 /var/lib/lckit/php /var/lib/lckit/php/session /var/lib/lckit/php/cache 2>/dev/null || true
+  _php_pool_performance "${conf}"
+  _php_ini_hardening "${ini}"
+  _php_opcache_tune "/etc/php/${ver}/fpm/conf.d"
   if ! grep -q 'php_value\[session.save_path\]' "${conf}"; then
     printf '\nphp_value[session.save_path] = /var/lib/lckit/php/session\n' >> "${conf}"
   fi
+}
+
+cmd_php() {
+  local sub="${1:-status}"
+  shift || true
+  case "${sub}" in
+    install)
+      need_root
+      local ver="8.4"
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --version|-v) ver="${2:-8.4}"; shift 2 ;;
+          8.2|8.3|8.4|8.5|7.4|8.0|8.1) ver="$1"; shift ;;
+          *) die "unknown php install option: $1" ;;
+        esac
+      done
+      php_install "${ver}"
+      ;;
+    status)
+      php_load_state
+      echo "version: ${PHP_VERSION:-unknown}"
+      echo "unit:    ${PHP_FPM_UNIT:-unknown}"
+      echo "socket:  ${PHP_SOCKET:-unknown}"
+      if [[ -n "${PHP_FPM_UNIT:-}" ]]; then
+        echo "active:  $(systemctl is-active "${PHP_FPM_UNIT}" 2>/dev/null || echo unknown)"
+      fi
+      ;;
+    ""|help|-h|--help)
+      cat <<'EOF'
+Usage: lckit php <install|status>
+
+  lckit php install [--version 8.4]
+  lckit php install 8.3
+  lckit php status
+
+After install, create a PHP site:
+  lckit site add -d blog.example.com -t php
+EOF
+      ;;
+    *)
+      die "unknown php subcommand: ${sub}"
+      ;;
+  esac
 }

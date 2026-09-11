@@ -140,15 +140,31 @@ cmd_doctor() {
   echo "mirror:  $(mirror_profile)"
   echo "webroot: ${WEB_ROOT}"
   echo "sites:   ${CADDY_SITES}"
+  echo "secrets: ${LCKIT_STATE}/secrets"
   echo
   echo "services:"
-  for s in caddy mariadb postgresql "php-fpm" "php8.4-fpm" "php8.3-fpm"; do
+  local s st
+  for s in caddy mariadb postgresql "postgresql-${PG_MAJOR}" php-fpm php8.2-fpm php8.3-fpm php8.4-fpm php8.5-fpm; do
     if systemctl list-unit-files "${s}.service" >/dev/null 2>&1; then
-      local st
       st="$(systemctl is-active "${s}.service" 2>/dev/null || echo inactive)"
-      printf '  %-16s %s\n' "${s}" "${st}"
+      printf '  %-18s %s\n' "${s}" "${st}"
     fi
   done
+  # app units
+  local unit
+  for unit in /etc/systemd/system/lckit-app-*.service; do
+    [[ -e "${unit}" ]] || continue
+    st="$(systemctl is-active "$(basename "${unit}")" 2>/dev/null || echo inactive)"
+    printf '  %-18s %s\n' "$(basename "${unit}")" "${st}"
+  done
+  echo
+  echo "components:"
+  if declare -F cmd_db >/dev/null 2>&1; then
+    cmd_db status 2>/dev/null | sed 's/^/  /' || true
+  fi
+  if declare -F cmd_php >/dev/null 2>&1; then
+    cmd_php status 2>/dev/null | sed 's/^/  /' || true
+  fi
   echo
   echo "sites:"
   site_list || true

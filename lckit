@@ -25,32 +25,40 @@ Usage:
   lckit setup              Interactive stack setup
   lckit site <cmd>         Manage sites (static | php | proxy)
   lckit app  <cmd>         Manage backend app units (Go/Rust/any HTTP binary)
+  lckit db   <cmd>         Install / inspect MariaDB or PostgreSQL
+  lckit php  <cmd>         Install / inspect PHP-FPM
   lckit mirror <cmd>       Show or switch package mirrors
   lckit doctor             Print environment summary
   lckit help               This help
 
 Site commands:
   lckit site add -d example.com -t static|php|proxy [options]
-  lckit site list
-  lckit site show <domain>
-  lckit site rm  <domain>
+  lckit site list | show <domain> | rm <domain>
 
 App commands:
   lckit app add --name api --bin /opt/api/api --port 8080
-  lckit app list
-  lckit app rm <name>
-  lckit app start|stop|restart|status <name>
+  lckit app list | rm <name> | start|stop|restart|status <name>
+
+Database (can be installed AFTER setup):
+  lckit db install mariadb [--series 11.4] [--password SECRET]
+  lckit db install postgresql [--password SECRET]
+  lckit db status
+
+PHP (can be installed AFTER setup):
+  lckit php install [--version 8.4]
+  lckit php status
 
 Mirror commands:
-  lckit mirror show
-  lckit mirror set official|tuna|aliyun|ustc
-  lckit mirror apply
+  lckit mirror show | set official|tuna|aliyun|ustc | apply | list
 
 Examples:
   lckit setup
+  lckit db install mariadb
+  lckit db install postgresql
+  lckit php install --version 8.4
+  lckit site add -d blog.example.com -t php
   lckit app  add --name api --bin /opt/api/api --port 8080
   lckit site add -d api.example.com -t proxy --upstream http://127.0.0.1:8080
-  lckit mirror set tuna
 EOF
 }
 
@@ -66,6 +74,12 @@ main() {
       ;;
     app)
       cmd_app "$@"
+      ;;
+    db)
+      cmd_db "$@"
+      ;;
+    php)
+      cmd_php "$@"
       ;;
     mirror)
       cmd_mirror "$@"

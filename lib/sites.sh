@@ -100,7 +100,13 @@ site_write_php() {
   conf="$(site_conf_path "${domain}")"
   mkdir -p "${docroot}"
   if [[ ! -f "${docroot}/index.php" ]]; then
-    printf '<?php\nphpinfo();\n' > "${docroot}/index.php"
+    cat > "${docroot}/index.php" <<EOF
+<?php
+// LCKit placeholder — replace with your application.
+header('Content-Type: text/plain; charset=utf-8');
+echo "LCKit PHP site: ${domain}\\n";
+echo "PHP " . PHP_VERSION . "\\n";
+EOF
   fi
   if id caddy >/dev/null 2>&1; then
     chown -R caddy:caddy "${docroot}" 2>/dev/null || true
@@ -176,7 +182,13 @@ site_add() {
       sites_index_upsert "${domain}" "static" "-" "${docroot}" "${tls}" "${conf}"
       ;;
     php)
-      [[ -n "${socket}" ]] || socket="${PHP_SOCKET:-unix//run/php/php-fpm.sock}"
+      if [[ -z "${socket}" ]]; then
+        if declare -F php_detect_socket >/dev/null 2>&1; then
+          socket="$(php_detect_socket)"
+        else
+          socket="unix//run/php/php-fpm.sock"
+        fi
+      fi
       site_write_php "${domain}" "${docroot}" "${socket}" "${tls}"
       sites_index_upsert "${domain}" "php" "${socket}" "${docroot}" "${tls}" "${conf}"
       ;;
