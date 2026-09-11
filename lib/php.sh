@@ -98,12 +98,15 @@ php_install() {
 }
 
 _php_pool_user() {
+  # Prefer Caddy when present (front-end user), then www-data, then nginx — only if the account exists.
   if id caddy >/dev/null 2>&1; then
     echo caddy
   elif id www-data >/dev/null 2>&1; then
     echo www-data
-  else
+  elif id nginx >/dev/null 2>&1; then
     echo nginx
+  else
+    echo www-data
   fi
 }
 
