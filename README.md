@@ -34,6 +34,12 @@ Requires root and internet access.
 ## Install
 
 ```bash
+# one file
+curl -fsSL https://raw.githubusercontent.com/houseme/lckit/main/lckit -o lckit
+chmod +x lckit
+sudo ./lckit setup
+
+# or clone the repository
 git clone https://github.com/houseme/lckit.git
 cd lckit
 chmod +x lckit

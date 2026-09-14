@@ -39,8 +39,15 @@ EOF
 web_write_default_site() {
   ensure_base_dirs
   mkdir -p "${WEB_DEFAULT}"
-  if [[ -f "${LCKIT_HOME}/share/default-site/index.html" ]]; then
-    cp -f "${LCKIT_HOME}/share/default-site/index.html" "${WEB_DEFAULT}/index.html"
+  local src=""
+  for src in \
+    "${LCKIT_HOME}/share/default-site/index.html" \
+    /usr/local/share/lckit/index.html; do
+    [[ -f "${src}" ]] && break
+    src=""
+  done
+  if [[ -n "${src}" ]]; then
+    cp -f "${src}" "${WEB_DEFAULT}/index.html"
   else
     web_emit_fallback_index
   fi

@@ -34,6 +34,12 @@ English: [README.md](README.md) · 文档：[docs/zh/README.md](docs/zh/README.m
 ## 安装
 
 ```bash
+# one file
+curl -fsSL https://raw.githubusercontent.com/houseme/lckit/main/lckit -o lckit
+chmod +x lckit
+sudo ./lckit setup
+
+# or clone the repository
 git clone https://github.com/houseme/lckit.git
 cd lckit
 chmod +x lckit

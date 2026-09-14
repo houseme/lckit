@@ -27,8 +27,7 @@ Linux + Caddy Kit 命令手册。
 ## 安装
 
 ```bash
-git clone https://github.com/houseme/lckit.git
-cd lckit
+curl -fsSL https://raw.githubusercontent.com/houseme/lckit/main/lckit -o lckit
 chmod +x lckit
 sudo ./lckit setup
 ```

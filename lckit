@@ -1,23 +1,2343 @@
 #!/usr/bin/env bash
-# LCKit — Linux + Caddy Kit
+# LCKit — Linux + Caddy Kit (single-file build)
 # Independent implementation. Idea inspiration only; not derived from GPL sources.
 # SPDX-License-Identifier: Apache-2.0
 # Repository: https://github.com/houseme/lckit
+#
+# One-file install:
+#   curl -fsSL https://raw.githubusercontent.com/houseme/lckit/main/lckit -o lckit
+#   chmod +x lckit && sudo ./lckit setup
+#
 set -euo pipefail
 
 LCKIT_HOME="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 export LCKIT_HOME
-# shellcheck source=lib/core.sh
-source "${LCKIT_HOME}/lib/core.sh"
-source "${LCKIT_HOME}/lib/os.sh"
-source "${LCKIT_HOME}/lib/mirrors.sh"
-source "${LCKIT_HOME}/lib/web.sh"
-source "${LCKIT_HOME}/lib/db.sh"
-source "${LCKIT_HOME}/lib/php.sh"
-source "${LCKIT_HOME}/lib/sites.sh"
-source "${LCKIT_HOME}/lib/apps.sh"
-source "${LCKIT_HOME}/lib/ui.sh"
+LCKIT_SINGLE_FILE=1
 
+# ===== lib/core.sh =====
+
+: "${LCKIT_REPO:=https://github.com/houseme/lckit}"
+: "${LCKIT_LICENSE:=Apache-2.0}"
+: "${LCKIT_STATE:=/var/lib/lckit}"
+: "${LCKIT_LOG:=/var/log/lckit.log}"
+: "${LCKIT_ETC:=/etc/lckit}"
+: "${WEB_ROOT:=/data/web}"
+: "${WEB_DEFAULT:=/data/web/default}"
+: "${CADDY_MAIN:=/etc/caddy/Caddyfile}"
+: "${CADDY_SITES:=/etc/caddy/sites}"
+: "${UNIT_DIR:=/etc/systemd/system}"
+: "${PG_MAJOR:=18}"
+# Passwords are generated at install time; this is only a last-resort fallback label.
+: "${DB_DEFAULT_PASS:=}"
+
+# shellcheck disable=SC2034
+LCKIT_VERSION="1.0.0"
+
+_color() {
+  local c="$1"; shift
+  printf '\033[%sm%s\033[0m' "${c}" "$*"
+}
+ok()   { _color "1;32" "$*"; }
+warn() { _color "1;33" "$*"; }
+err()  { _color "1;31" "$*"; }
+
+log_line() {
+  local level="$1"; shift
+  local ts
+  ts="$(date '+%Y-%m-%d %H:%M:%S')"
+  local msg="[${ts}] [${level}] $*"
+  mkdir -p "$(dirname "${LCKIT_LOG}")" 2>/dev/null || true
+  printf '%s\n' "${msg}" | tee -a "${LCKIT_LOG}" 2>/dev/null || printf '%s\n' "${msg}"
+}
+
+info()  { log_line "INFO" "$*"; }
+warnl() { log_line "WARN" "$(warn "$*")"; }
+die()   { log_line "ERROR" "$(err "$*")" >&2; exit 2; }
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+need_root() {
+  if [[ "${EUID}" -ne 0 ]]; then
+    die "Root privileges are required"
+  fi
+}
+
+ensure_base_dirs() {
+  mkdir -p \
+    "${LCKIT_STATE}" \
+    "${LCKIT_ETC}" \
+    "${WEB_ROOT}" \
+    "${CADDY_SITES}" \
+    /var/log/caddy 2>/dev/null || true
+}
+
+run() {
+  local cmdline="$1"
+  info "run: ${cmdline}"
+  if ! bash -c "${cmdline}" >>"${LCKIT_LOG}" 2>&1; then
+    die "command failed: ${cmdline}"
+  fi
+}
+
+try() {
+  local cmdline="$1"
+  info "try: ${cmdline}"
+  if ! bash -c "${cmdline}" >>"${LCKIT_LOG}" 2>&1; then
+    warnl "non-zero exit (ignored): ${cmdline}"
+  fi
+  return 0
+}
+
+# Join args into a package install command for the host platform.
+pkg_install() {
+  if os_is_rhel; then
+    run "dnf install -y $*"
+  else
+    run "DEBIAN_FRONTEND=noninteractive apt-get install -y $*"
+  fi
+}
+
+version_ge() {
+  # true when $1 >= $2 (dotted)
+  [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n1)" == "$2" ]]
+}
+
+state_put() {
+  local key="$1" value="$2"
+  ensure_base_dirs
+  printf '%s=%s\n' "${key}" "${value}" > "${LCKIT_STATE}/${key}"
+}
+
+state_get() {
+  local key="$1"
+  local file="${LCKIT_STATE}/${key}"
+  if [[ -f "${file}" ]]; then
+    # file content is key=value; return value only
+    sed -n 's/^[^=]*=//p' "${file}" | head -n1
+  fi
+}
+
+require_cmd_name() {
+  local name="$1"
+  [[ "${name}" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$ ]]
+}
+
+require_domain() {
+  local d="$1"
+  [[ "${d}" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$ ]]
+}
+
+secret_dir() {
+  echo "${LCKIT_STATE}/secrets"
+}
+
+secret_store() {
+  local name="$1" value="$2"
+  mkdir -p "$(secret_dir)"
+  chmod 700 "$(secret_dir)" 2>/dev/null || true
+  local f
+  f="$(secret_dir)/${name}"
+  printf '%s' "${value}" > "${f}"
+  chmod 600 "${f}" 2>/dev/null || true
+  # Never echo the secret
+  info "secret stored: ${f}"
+}
+
+secret_read() {
+  local name="$1"
+  local f
+  f="$(secret_dir)/${name}"
+  [[ -f "${f}" ]] || return 1
+  cat "${f}"
+}
+
+secret_generate() {
+  # 24-char url-safe secret
+  if have openssl; then
+    openssl rand -base64 24 | tr -d '=+/' | cut -c1-24
+  else
+    tr -dc 'A-Za-z0-9' </dev/urandom | head -c 24
+  fi
+}
+
+site_conf_path() {
+  local domain="$1"
+  echo "${CADDY_SITES}/${domain}.caddy"
+}
+
+site_docroot() {
+  local domain="$1"
+  echo "${WEB_ROOT}/${domain}"
+}
+
+app_unit_name() {
+  echo "lckit-app-$1.service"
+}
+
+# ===== lib/os.sh =====
+
+os_id() {
+  awk -F= '/^ID=/{gsub(/"/,"",$2); print $2}' /etc/os-release 2>/dev/null || true
+}
+
+os_version_id() {
+  awk -F= '/^VERSION_ID=/{gsub(/"/,"",$2); print $2}' /etc/os-release 2>/dev/null || true
+}
+
+os_codename() {
+  local n
+  n="$(awk -F= '/^VERSION_CODENAME=/{gsub(/"/,"",$2); print $2}' /etc/os-release 2>/dev/null || true)"
+  if [[ -z "${n}" ]] && have lsb_release; then
+    n="$(lsb_release -sc 2>/dev/null || true)"
+  fi
+  printf '%s' "${n}"
+}
+
+os_pretty() {
+  awk -F= '/^PRETTY_NAME=/{gsub(/^"|"$/,"",$2); print $2}' /etc/os-release 2>/dev/null || uname -s
+}
+
+os_is_rhel() {
+  local id
+  id="$(os_id)"
+  [[ "${id}" =~ ^(rhel|centos|rocky|almalinux|ol|fedora)$ ]] || [[ -f /etc/redhat-release ]]
+}
+
+os_is_debian_family() {
+  local id
+  id="$(os_id)"
+  [[ "${id}" == "debian" || "${id}" == "ubuntu" ]]
+}
+
+os_major() {
+  local v
+  v="$(os_version_id)"
+  echo "${v%%.*}"
+}
+
+os_supported() {
+  local id ver
+  id="$(os_id)"
+  ver="$(os_version_id)"
+  if os_is_rhel; then
+    local maj="${ver%%.*}"
+    [[ "${maj}" =~ ^(8|9|10)$ ]] && return 0
+  fi
+  if [[ "${id}" == "debian" ]]; then
+    local maj="${ver%%.*}"
+    [[ "${maj}" =~ ^(11|12|13)$ ]] && return 0
+  fi
+  if [[ "${id}" == "ubuntu" ]]; then
+    [[ "${ver}" == "22.04" || "${ver}" == "24.04" ]] && return 0
+  fi
+  return 1
+}
+
+os_extras_repo() {
+  # RHEL8 powertools / RHEL9+ crb
+  local maj
+  maj="$(os_major)"
+  if [[ "${maj}" == "8" ]]; then
+    echo "powertools"
+  else
+    echo "crb"
+  fi
+}
+
+enable_epel() {
+  local maj base
+  maj="$(os_major)"
+  base="$(mirror_epel_base)"
+  run "dnf install -y ${base}/epel-release-latest-${maj}.noarch.rpm"
+  if [[ "$(mirror_profile)" != "official" ]]; then
+    mirror_rewire_epel
+  fi
+  if have subscription-manager; then
+    try "subscription-manager repos --enable codeready-builder-for-rhel-${maj}-\$(uname -m)-rpms"
+  elif [[ -s "/etc/yum.repos.d/oracle-linux-ol${maj}.repo" ]]; then
+    run "dnf config-manager --set-enabled ol${maj}_codeready_builder"
+  else
+    run "dnf config-manager --set-enabled $(os_extras_repo)"
+  fi
+}
+
+sysctl_enable_bbr() {
+  local kern
+  kern="$(uname -r | cut -d- -f1)"
+  version_ge "${kern}" "4.9.0" || { warnl "kernel < 4.9, skip BBR"; return 0; }
+  local current
+  current="$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || true)"
+  [[ "${current}" == "bbr" ]] && { info "BBR already active"; return 0; }
+  local f=/etc/sysctl.d/99-lckit-bbr.conf
+  cat > "${f}" <<'EOF'
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+net.core.rmem_max = 2500000
+EOF
+  try "sysctl --system"
+}
+
+open_edge_ports() {
+  if have firewall-cmd && systemctl is-active --quiet firewalld; then
+    local zone
+    zone="$(firewall-cmd --get-default-zone)"
+    try "firewall-cmd --permanent --zone=${zone} --add-service=http"
+    try "firewall-cmd --permanent --zone=${zone} --add-service=https"
+    try "firewall-cmd --permanent --zone=${zone} --add-port=443/udp"
+    try "firewall-cmd --reload"
+  elif have ufw && ufw status 2>/dev/null | grep -q 'Status: active'; then
+    try "ufw allow http"
+    try "ufw allow https"
+    try "ufw allow 443/udp"
+  else
+    warnl "no active firewall manager detected; ensure 80/443 are allowed upstream"
+  fi
+}
+
+sys_prepare() {
+  os_supported || die "Unsupported OS. Need EL8-10 / Debian 11-13 / Ubuntu 22.04|24.04"
+  info "Host: $(os_pretty) ($(uname -m))"
+  mirror_bootstrap_os
+  if os_is_rhel; then
+    enable_epel
+    run "dnf makecache"
+    pkg_install curl ca-certificates tar unzip git jq tree vim wget
+  else
+    pkg_install curl ca-certificates tar unzip git jq tree vim wget gnupg lsb-release apt-transport-https
+  fi
+  if [[ -s /etc/selinux/config ]] && grep -q '^SELINUX=enforcing' /etc/selinux/config; then
+    sed -i 's/^SELINUX=.*/SELINUX=disabled/' /etc/selinux/config
+    try "setenforce 0"
+    info "SELinux set to disabled (takes full effect after reboot)"
+  fi
+  sysctl_enable_bbr
+  open_edge_ports
+  ensure_base_dirs
+}
+
+# ===== lib/mirrors.sh =====
+
+MIRROR_FILE="${LCKIT_ETC}/mirror.conf"
+MIRROR_BACKUP="${LCKIT_STATE}/mirror-backup"
+
+mirror_profile() {
+  if [[ -f "${MIRROR_FILE}" ]]; then
+    # shellcheck disable=SC1090
+    source "${MIRROR_FILE}" || true
+  fi
+  case "${LCKIT_MIRROR:-official}" in
+    official|tuna|aliyun|ustc) echo "${LCKIT_MIRROR:-official}" ;;
+    *) echo "official" ;;
+  esac
+}
+
+mirror_set_profile() {
+  local p="$1"
+  case "${p}" in
+    official|tuna|aliyun|ustc) ;;
+    *) die "unknown mirror profile: ${p}" ;;
+  esac
+  ensure_base_dirs
+  printf 'LCKIT_MIRROR=%s\n' "${p}" > "${MIRROR_FILE}"
+  info "mirror profile -> ${p}"
+}
+
+mirror_label() {
+  case "$1" in
+    official) echo "Official upstream" ;;
+    tuna)     echo "TUNA (Tsinghua)" ;;
+    aliyun)   echo "Aliyun" ;;
+    ustc)     echo "USTC" ;;
+  esac
+}
+
+mirror_debian_base() {
+  case "$(mirror_profile)" in
+    official) echo "http://deb.debian.org/debian" ;;
+    tuna)     echo "https://mirrors.tuna.tsinghua.edu.cn/debian" ;;
+    aliyun)   echo "https://mirrors.aliyun.com/debian" ;;
+    ustc)     echo "https://mirrors.ustc.edu.cn/debian" ;;
+  esac
+}
+
+mirror_debian_security() {
+  case "$(mirror_profile)" in
+    official) echo "http://security.debian.org/debian-security" ;;
+    tuna)     echo "https://mirrors.tuna.tsinghua.edu.cn/debian-security" ;;
+    aliyun)   echo "https://mirrors.aliyun.com/debian-security" ;;
+    ustc)     echo "https://mirrors.ustc.edu.cn/debian-security" ;;
+  esac
+}
+
+mirror_ubuntu_base() {
+  case "$(mirror_profile)" in
+    official) echo "http://archive.ubuntu.com/ubuntu" ;;
+    tuna)     echo "https://mirrors.tuna.tsinghua.edu.cn/ubuntu" ;;
+    aliyun)   echo "https://mirrors.aliyun.com/ubuntu" ;;
+    ustc)     echo "https://mirrors.ustc.edu.cn/ubuntu" ;;
+  esac
+}
+
+mirror_epel_base() {
+  case "$(mirror_profile)" in
+    official) echo "https://dl.fedoraproject.org/pub/epel" ;;
+    tuna)     echo "https://mirrors.tuna.tsinghua.edu.cn/epel" ;;
+    aliyun)   echo "https://mirrors.aliyun.com/epel" ;;
+    ustc)     echo "https://mirrors.ustc.edu.cn/epel" ;;
+  esac
+}
+
+mirror_pgdg_base() {
+  case "$(mirror_profile)" in
+    official) echo "https://apt.postgresql.org/pub/repos/apt" ;;
+    tuna)     echo "https://mirrors.tuna.tsinghua.edu.cn/postgresql/repos/apt" ;;
+    aliyun)   echo "https://mirrors.aliyun.com/postgresql/repos/apt" ;;
+    ustc)     echo "https://mirrors.ustc.edu.cn/postgresql/repos/apt" ;;
+  esac
+}
+
+mirror_mariadb_base() {
+  case "$(mirror_profile)" in
+    official) echo "" ;;
+    tuna)     echo "https://mirrors.tuna.tsinghua.edu.cn/mariadb" ;;
+    aliyun)   echo "https://mirrors.aliyun.com/mariadb" ;;
+    ustc)     echo "" ;;
+  esac
+}
+
+mirror_sury_base() {
+  case "$(mirror_profile)" in
+    official) echo "https://packages.sury.org/php" ;;
+    tuna)     echo "https://mirrors.tuna.tsinghua.edu.cn/sury/php" ;;
+    *)        echo "" ;;
+  esac
+}
+
+_mirror_backup() {
+  local f="$1"
+  [[ -f "${f}" ]] || return 0
+  mkdir -p "${MIRROR_BACKUP}"
+  local key="${f//\//_}"
+  [[ -f "${MIRROR_BACKUP}/${key}" ]] || cp -a "${f}" "${MIRROR_BACKUP}/${key}"
+}
+
+mirror_rewire_epel() {
+  local profile
+  profile="$(mirror_profile)"
+  [[ "${profile}" == "official" ]] && return 0
+  local base
+  base="$(mirror_epel_base)"
+  local f
+  for f in /etc/yum.repos.d/epel.repo /etc/yum.repos.d/epel-modular.repo; do
+    [[ -f "${f}" ]] || continue
+    _mirror_backup "${f}"
+    sed -i 's/^metalink=/#metalink=/g' "${f}"
+    sed -i "s#https\?://download\.fedoraproject\.org/pub/epel#${base}#g" "${f}"
+    sed -i "s#https\?://dl\.fedoraproject\.org/pub/epel#${base}#g" "${f}"
+  done
+  try "dnf makecache"
+}
+
+mirror_rewire_debian_os() {
+  local profile
+  profile="$(mirror_profile)"
+  [[ "${profile}" == "official" ]] && return 0
+  os_is_debian_family || return 0
+
+  local deb secpkg
+  deb="$(mirror_debian_base)"
+  local files=()
+  [[ -f /etc/apt/sources.list ]] && files+=(/etc/apt/sources.list)
+  if [[ -d /etc/apt/sources.list.d ]]; then
+    local n
+    while IFS= read -r n; do
+      files+=("${n}")
+    done < <(find /etc/apt/sources.list.d -maxdepth 1 -type f \( -name '*.list' -o -name '*.sources' \) 2>/dev/null)
+  fi
+
+  local f base
+  for f in "${files[@]}"; do
+    [[ -f "${f}" ]] || continue
+    base="$(basename "${f}")"
+    case "${base}" in
+      caddy*|php*|pgdg*|mariadb*|docker*|nodesource*) continue ;;
+    esac
+    _mirror_backup "${f}"
+    if os_is_rhel; then
+      :
+    elif [[ "$(os_id)" == "debian" ]]; then
+      secpkg="$(mirror_debian_security)"
+      sed -i "s#https\?://deb\.debian\.org/debian#${deb}#g" "${f}"
+      sed -i "s#https\?://security\.debian\.org/debian-security#${secpkg}#g" "${f}"
+    else
+      local ubu
+      ubu="$(mirror_ubuntu_base)"
+      sed -i "s#https\?://archive\.ubuntu\.com/ubuntu#${ubu}#g" "${f}"
+      sed -i "s#https\?://security\.ubuntu\.com/ubuntu#${ubu}#g" "${f}"
+    fi
+  done
+  try "apt-get update"
+}
+
+mirror_bootstrap_os() {
+  # Called before base packages; only rewires apt sources for CN profiles.
+  if os_is_debian_family && [[ "$(mirror_profile)" != "official" ]]; then
+    mirror_rewire_debian_os
+  else
+    if os_is_debian_family; then
+      try "apt-get update"
+    fi
+  fi
+}
+
+mirror_apply_all() {
+  local profile
+  profile="$(mirror_profile)"
+  info "applying mirror profile: $(mirror_label "${profile}")"
+  if os_is_debian_family; then
+    mirror_rewire_debian_os
+    if [[ -f /etc/apt/sources.list.d/pgdg.list ]]; then
+      local pg
+      pg="$(mirror_pgdg_base)"
+      _mirror_backup /etc/apt/sources.list.d/pgdg.list
+      sed -i "s#https\?://apt\.postgresql\.org/pub/repos/apt#${pg}#g" /etc/apt/sources.list.d/pgdg.list
+      try "apt-get update"
+    fi
+    if [[ -f /etc/apt/sources.list.d/php.list ]]; then
+      local sy
+      sy="$(mirror_sury_base)"
+      if [[ -n "${sy}" ]]; then
+        _mirror_backup /etc/apt/sources.list.d/php.list
+        sed -i "s#https\?://packages\.sury\.org/php#${sy}#g" /etc/apt/sources.list.d/php.list
+        try "apt-get update"
+      fi
+    fi
+    if [[ -f /etc/apt/sources.list.d/mariadb.list ]]; then
+      local mb
+      mb="$(mirror_mariadb_base)"
+      if [[ -n "${mb}" ]]; then
+        _mirror_backup /etc/apt/sources.list.d/mariadb.list
+        sed -i "s#https://dlm\.mariadb\.com/repo/#${mb}/repo/#g" /etc/apt/sources.list.d/mariadb.list
+        try "apt-get update"
+      fi
+    fi
+  elif os_is_rhel; then
+    mirror_rewire_epel
+  fi
+}
+
+cmd_mirror() {
+  local sub="${1:-show}"
+  shift || true
+  case "${sub}" in
+    show)
+      local p
+      p="$(mirror_profile)"
+      echo "profile: ${p} ($(mirror_label "${p}"))"
+      echo "file:    ${MIRROR_FILE}"
+      echo "epel:    $(mirror_epel_base)"
+      echo "pgdg:    $(mirror_pgdg_base)"
+      echo "sury:    $(mirror_sury_base)"
+      echo "mariadb: $(mirror_mariadb_base)"
+      ;;
+    set)
+      local p="${1:-}"
+      [[ -n "${p}" ]] || die "usage: lckit mirror set <official|tuna|aliyun|ustc>"
+      need_root
+      mirror_set_profile "${p}"
+      mirror_apply_all
+      ;;
+    apply)
+      need_root
+      mirror_apply_all
+      ;;
+    list)
+      printf '%s\n' \
+        "official  upstream public repositories" \
+        "tuna      https://mirrors.tuna.tsinghua.edu.cn" \
+        "aliyun    https://mirrors.aliyun.com" \
+        "ustc      https://mirrors.ustc.edu.cn"
+      ;;
+    help|-h|--help)
+      cat <<'EOF'
+Usage: lckit mirror <show|set|apply|list>
+
+  lckit mirror show
+  lckit mirror set official|tuna|aliyun|ustc
+  lckit mirror apply
+  lckit mirror list
+
+Repository: https://github.com/houseme/lckit
+EOF
+      ;;
+    *)
+      die "usage: lckit mirror show|set|apply|list"
+      ;;
+  esac
+}
+
+# ===== lib/web.sh =====
+
+web_install_caddy() {
+  if os_is_rhel; then
+    try "dnf install -y 'dnf-command(copr)'"
+    try "dnf copr enable -y @caddy/caddy"
+    pkg_install caddy
+  else
+    pkg_install debian-keyring debian-archive-keyring || true
+    run "curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/gpg.key | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg"
+    run "chmod a+r /usr/share/keyrings/caddy-stable-archive-keyring.gpg"
+    mkdir -p /etc/apt/sources.list.d
+    curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt > /etc/apt/sources.list.d/caddy-stable.list
+    run "apt-get update"
+    run "DEBIAN_FRONTEND=noninteractive apt-get install -y caddy"
+  fi
+  info "Caddy package installed"
+}
+
+web_write_main_config() {
+  ensure_base_dirs
+  # Keep admin endpoint on localhost so `caddy reload` / systemctl reload works.
+  cat > "${CADDY_MAIN}" <<EOF
+{
+	admin localhost:2019
+}
+import ${CADDY_SITES}/*.caddy
+EOF
+  # Caddy user must write access logs
+  mkdir -p /var/log/caddy
+  if id caddy >/dev/null 2>&1; then
+    chown -R caddy:caddy /var/log/caddy 2>/dev/null || true
+    chmod 755 /var/log/caddy 2>/dev/null || true
+  fi
+}
+
+web_write_default_site() {
+  ensure_base_dirs
+  mkdir -p "${WEB_DEFAULT}"
+  local src=""
+  for src in \
+    "${LCKIT_HOME}/share/default-site/index.html" \
+    /usr/local/share/lckit/index.html; do
+    [[ -f "${src}" ]] && break
+    src=""
+  done
+  if [[ -n "${src}" ]]; then
+    cp -f "${src}" "${WEB_DEFAULT}/index.html"
+  else
+    web_emit_fallback_index
+  fi
+  if [[ -f "${LCKIT_HOME}/share/default-site/favicon.svg" ]]; then
+    cp -f "${LCKIT_HOME}/share/default-site/favicon.svg" "${WEB_DEFAULT}/favicon.svg"
+  fi
+  if id caddy >/dev/null 2>&1; then
+    chown -R caddy:caddy "${WEB_DEFAULT}" 2>/dev/null || true
+  fi
+
+  cat > "${CADDY_SITES}/00-default.caddy" <<EOF
+:80 {
+	encode zstd gzip
+	root * ${WEB_DEFAULT}
+	file_server {
+		index index.html
+	}
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options SAMEORIGIN
+		Referrer-Policy strict-origin-when-cross-origin
+	}
+	log {
+		output file /var/log/caddy/default-access.log {
+			roll_size 32MiB
+			roll_keep 3
+			roll_keep_for 7d
+		}
+	}
+}
+EOF
+  info "default static site ready at ${WEB_DEFAULT}"
+}
+
+web_emit_fallback_index() {
+  cat > "${WEB_DEFAULT}/index.html" <<'HTML'
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LCKit is ready</title>
+  <style>
+    body{margin:0;min-height:100vh;display:grid;place-items:center;background:#0b1220;color:#e8eef7;
+      font-family:system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC",sans-serif}
+    main{width:min(680px,92vw);padding:2rem;border:1px solid rgba(255,255,255,.08);border-radius:16px;background:#121a2b}
+    h1{margin:0 0 .5rem;font-size:1.75rem}
+    p{color:#8b9bb4;line-height:1.6}
+    code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;background:#0a0f18;padding:.15rem .4rem;border-radius:6px;color:#9ecbff}
+    ul{line-height:1.9;padding-left:1.1rem}
+  </style>
+</head>
+<body>
+  <main>
+    <h1>LCKit 已就绪</h1>
+    <p>Caddy 默认站点。继续创建业务站点：</p>
+    <ul>
+      <li>静态：<code>lckit site add -d example.com -t static</code></li>
+      <li>反代：<code>lckit site add -d api.example.com -t proxy --upstream http://127.0.0.1:8080</code></li>
+      <li>后端：<code>lckit app add --name api --bin /opt/api/api --port 8080</code></li>
+    </ul>
+  </main>
+</body>
+</html>
+HTML
+}
+
+web_reload() {
+  # Prefer restart: robust when admin API is unavailable or config just changed.
+  try "systemctl restart caddy"
+  if ! systemctl is-active --quiet caddy 2>/dev/null; then
+    warnl "caddy is not active; check: journalctl -u caddy -n 50"
+  fi
+}
+
+web_install_and_configure() {
+  web_install_caddy
+  web_write_main_config
+  web_write_default_site
+  web_reload
+}
+
+# ===== lib/db.sh =====
+
+# Persist last install metadata
+db_mark_installed() {
+  local engine="$1" detail="$2"
+  ensure_base_dirs
+  printf '%s\n' "${detail}" > "${LCKIT_STATE}/db-${engine}"
+}
+
+db_status_line() {
+  local unit="$1"
+  if systemctl list-unit-files "${unit}.service" >/dev/null 2>&1; then
+    systemctl is-active "${unit}.service" 2>/dev/null || echo inactive
+  else
+    echo "not-installed"
+  fi
+}
+
+_db_tune_mariadb_cnf() {
+  local cnf="$1"
+  [[ -f "${cnf}" ]] || return 0
+  local mem_mb
+  mem_mb="$(awk '/MemTotal/{printf "%d", $2/1024}' /proc/meminfo 2>/dev/null || echo 512)"
+  local pool=128
+  if (( mem_mb >= 4096 )); then pool=512
+  elif (( mem_mb >= 2048 )); then pool=256
+  elif (( mem_mb >= 1024 )); then pool=128
+  else pool=64
+  fi
+
+  # Drop previous LCKit block if present, then append tuned settings
+  if grep -q '^# BEGIN LCKit' "${cnf}" 2>/dev/null; then
+    sed -i '/^# BEGIN LCKit/,/^# END LCKit/d' "${cnf}"
+  fi
+
+  # Prefer a dedicated drop-in when directory exists
+  local dropin_dir=""
+  if [[ -d /etc/mysql/mariadb.conf.d ]]; then
+    dropin_dir=/etc/mysql/mariadb.conf.d
+  elif [[ -d /etc/my.cnf.d ]]; then
+    dropin_dir=/etc/my.cnf.d
+  fi
+
+  local content
+  content=$(cat <<EOF
+# BEGIN LCKit
+[mysqld]
+bind-address = 127.0.0.1
+skip-name-resolve
+character-set-server = utf8mb4
+collation-server = utf8mb4_unicode_ci
+innodb_buffer_pool_size = ${pool}M
+innodb_log_file_size = 64M
+max_allowed_packet = 64M
+max_connections = 100
+# END LCKit
+EOF
+)
+  if [[ -n "${dropin_dir}" ]]; then
+    printf '%s\n' "${content}" > "${dropin_dir}/99-lckit.cnf"
+  else
+    printf '\n%s\n' "${content}" >> "${cnf}"
+  fi
+}
+
+_db_set_mariadb_password() {
+  local password="$1"
+  # Avoid putting the password on argv when possible
+  local defaults
+  defaults="$(mktemp)"
+  chmod 600 "${defaults}"
+  cat > "${defaults}" <<EOF
+[client]
+user=root
+password=${password}
+EOF
+  if ! mariadb --defaults-extra-file="${defaults}" -e "SELECT 1;" >/dev/null 2>&1; then
+    # First boot: set password via unix socket without auth
+    mariadb -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '${password//\'/\\\'}';" 2>/dev/null \
+      || mariadb -e "SET PASSWORD FOR 'root'@'localhost' = PASSWORD('${password//\'/\\\'}');" 2>/dev/null \
+      || true
+    # Remove anonymous users / test DB (best effort)
+    mariadb -e "DELETE FROM mysql.user WHERE User=''; DROP DATABASE IF EXISTS test; FLUSH PRIVILEGES;" 2>/dev/null || true
+  fi
+  # Confirm
+  if mariadb --defaults-extra-file="${defaults}" -e "SELECT 1;" >/dev/null 2>&1; then
+    rm -f "${defaults}"
+    return 0
+  fi
+  rm -f "${defaults}"
+  warnl "MariaDB password confirmation failed; check service logs"
+  return 0
+}
+
+db_install_mariadb() {
+  local series="${1:-11.4}"
+  local password="${2:-}"
+
+  if [[ -z "${password}" ]]; then
+    password="$(secret_generate)"
+  fi
+  secret_store "mariadb_root" "${password}"
+
+  info "configuring MariaDB ${series} repositories"
+  local setup=/tmp/lckit-mariadb-repo-setup.sh
+  if ! curl -fsSL -o "${setup}" https://downloads.mariadb.com/MariaDB/mariadb_repo_setup; then
+    curl -fsSL -o "${setup}" https://raw.githubusercontent.com/MariaDB/mariadb_repo_setup/main/mariadb_repo_setup \
+      || die "unable to download MariaDB repo setup"
+  fi
+  chmod +x "${setup}"
+  if os_is_rhel && [[ "$(os_major)" == "10" ]] && have update-crypto-policies; then
+    try "update-crypto-policies --set LEGACY"
+  fi
+  if ! "${setup}" --mariadb-server-version="mariadb-${series}" >>"${LCKIT_LOG}" 2>&1; then
+    warnl "MariaDB repo setup returned non-zero; continuing if packages exist"
+  fi
+  rm -f "${setup}"
+
+  local cnf_path
+  if os_is_rhel; then
+    try "dnf config-manager --disable mariadb-maxscale"
+    pkg_install MariaDB-common MariaDB-server MariaDB-client MariaDB-shared
+    cnf_path=/etc/my.cnf.d/server.cnf
+  else
+    if [[ -f /etc/apt/sources.list.d/mariadb.list ]]; then
+      sed -i 's|^deb \[arch=amd64,arm64\] https://dlm.mariadb.com/repo/maxscale/latest/apt|#&|' \
+        /etc/apt/sources.list.d/mariadb.list || true
+      local mb
+      mb="$(mirror_mariadb_base)"
+      if [[ -n "${mb}" ]]; then
+        sed -i "s#https://dlm\.mariadb\.com/repo/#${mb}/repo/#g" /etc/apt/sources.list.d/mariadb.list || true
+      fi
+    fi
+    run "apt-get update"
+    run "DEBIAN_FRONTEND=noninteractive apt-get install -y mariadb-server mariadb-client"
+    cnf_path=/etc/mysql/mariadb.conf.d/50-server.cnf
+  fi
+
+  _db_tune_mariadb_cnf "${cnf_path}"
+  run "systemctl enable --now mariadb"
+  sleep 2
+  try "systemctl restart mariadb"
+  sleep 1
+  _db_set_mariadb_password "${password}"
+  db_mark_installed mariadb "series=${series}"
+  info "MariaDB ${series} ready on 127.0.0.1 (password stored in ${LCKIT_STATE}/secrets/mariadb_root)"
+}
+
+_db_tune_postgres() {
+  local conf_dir="$1"
+  local conf="${conf_dir}/postgresql.conf"
+  [[ -f "${conf}" ]] || return 0
+  local mem_mb
+  mem_mb="$(awk '/MemTotal/{printf "%d", $2/1024}' /proc/meminfo 2>/dev/null || echo 512)"
+  local shared=128
+  if (( mem_mb >= 4096 )); then shared=256
+  elif (( mem_mb >= 2048 )); then shared=128
+  else shared=64
+  fi
+  cat >> "${conf}" <<EOF
+
+# BEGIN LCKit
+listen_addresses = 'localhost'
+shared_buffers = ${shared}MB
+effective_cache_size = $(( mem_mb * 3 / 4 ))MB
+maintenance_work_mem = 64MB
+max_connections = 100
+# END LCKit
+EOF
+  local hba="${conf_dir}/pg_hba.conf"
+  if [[ -f "${hba}" ]]; then
+    # Local socket can stay peer for admin; TCP from localhost uses scram
+    sed -i 's/^\(host\s\+all\s\+all\s\+127.0.0.1\/32\s\+\)md5/\1scram-sha-256/' "${hba}" || true
+    sed -i 's/^\(host\s\+all\s\+all\s\+::1\/128\s\+\)md5/\1scram-sha-256/' "${hba}" || true
+    sed -i 's/^\(host\s\+all\s\+all\s\+127.0.0.1\/32\s\+\)peer/\1scram-sha-256/' "${hba}" || true
+  fi
+}
+
+db_install_postgresql() {
+  local password="${1:-}"
+  local major="${PG_MAJOR}"
+  if [[ -z "${password}" ]]; then
+    password="$(secret_generate)"
+  fi
+  secret_store "postgresql_postgres" "${password}"
+
+  info "installing PostgreSQL ${major} via PGDG"
+  if os_is_rhel; then
+    local maj conf_dir
+    maj="$(os_major)"
+    run "dnf install -y https://download.postgresql.org/pub/repos/yum/reporpms/EL-${maj}-\$(uname -m)/pgdg-redhat-repo-latest.noarch.rpm"
+    try "dnf -qy module disable postgresql"
+    pkg_install "postgresql${major}-server" "postgresql${major}" "postgresql${major}-contrib"
+    run "/usr/pgsql-${major}/bin/postgresql-${major}-setup initdb"
+    conf_dir="/var/lib/pgsql/${major}/data"
+    _db_tune_postgres "${conf_dir}"
+    run "systemctl enable --now postgresql-${major}"
+    sleep 2
+    try "sudo -u postgres psql -c \"ALTER USER postgres WITH PASSWORD '${password//\'/\\\'}';\""
+    db_mark_installed postgresql "major=${major} unit=postgresql-${major}"
+  else
+    local codename pg
+    codename="$(os_codename)"
+    [[ -n "${codename}" ]] || die "cannot detect distro codename"
+    pg="$(mirror_pgdg_base)"
+    pkg_install postgresql-common
+    install -d /usr/share/postgresql-common/pgdg
+    run "curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc"
+    echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] ${pg} ${codename}-pgdg main" \
+      > /etc/apt/sources.list.d/pgdg.list
+    run "apt-get update"
+    run "DEBIAN_FRONTEND=noninteractive apt-get install -y postgresql-${major} postgresql-client-${major}"
+    # Cluster conf usually /etc/postgresql/<ver>/main
+    local conf_dir="/etc/postgresql/${major}/main"
+    if [[ ! -d "${conf_dir}" ]]; then
+      conf_dir="$(find /etc/postgresql -maxdepth 2 -type d -name main 2>/dev/null | head -n1 || true)"
+    fi
+    [[ -n "${conf_dir}" ]] && _db_tune_postgres "${conf_dir}"
+    run "systemctl enable --now postgresql"
+    sleep 2
+    try "sudo -u postgres psql -c \"ALTER USER postgres WITH PASSWORD '${password//\'/\\\'}';\""
+    try "systemctl restart postgresql"
+    db_mark_installed postgresql "major=${major} unit=postgresql"
+  fi
+  info "PostgreSQL ${major} ready on localhost (password stored in ${LCKIT_STATE}/secrets/postgresql_postgres)"
+}
+
+cmd_db() {
+  local sub="${1:-status}"
+  shift || true
+  case "${sub}" in
+    install)
+      need_root
+      local engine="" series="11.4" password=""
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          mariadb)
+            engine="mariadb"
+            shift
+            ;;
+          postgresql|postgres)
+            engine="postgresql"
+            shift
+            ;;
+          --series) series="${2:-11.4}"; shift 2 ;;
+          --password) password="${2:-}"; shift 2 ;;
+          *) die "unknown db install option: $1" ;;
+        esac
+      done
+      case "${engine}" in
+        mariadb)
+          db_install_mariadb "${series}" "${password}"
+          ;;
+        postgresql)
+          db_install_postgresql "${password}"
+          ;;
+        *)
+          die "usage: lckit db install mariadb|postgresql [--series 11.4] [--password SECRET]"
+          ;;
+      esac
+      ;;
+    status)
+      echo "mariadb:     $(db_status_line mariadb)"
+      echo "postgresql:  $(db_status_line postgresql)"
+      if [[ "$(os_is_rhel && echo yes || echo no)" == "yes" ]]; then
+        echo "postgresql-${PG_MAJOR}: $(db_status_line "postgresql-${PG_MAJOR}")"
+      fi
+      ;;
+    ""|help|-h|--help)
+      cat <<'EOF'
+Usage: lckit db <install|status>
+
+  lckit db install mariadb [--series 11.4] [--password SECRET]
+  lckit db install postgresql [--password SECRET]
+  lckit db status
+
+Notes:
+  - If --password is omitted, a strong random password is generated
+    and stored under /var/lib/lckit/secrets/ (mode 0600).
+  - Databases listen on localhost only.
+
+Repository: https://github.com/houseme/lckit
+EOF
+      ;;
+    *)
+      die "unknown db subcommand: ${sub}"
+      ;;
+  esac
+}
+
+# ===== lib/php.sh =====
+
+# Globals filled by php_install; also persisted for later site add
+PHP_FPM_UNIT=""
+PHP_SOCKET=""
+
+php_save_state() {
+  ensure_base_dirs
+  mkdir -p /var/lib/lckit/php-data 2>/dev/null || true
+  # Avoid clashing with /var/lib/lckit/php session directory
+  printf 'PHP_FPM_UNIT=%s\nPHP_SOCKET=%s\nPHP_VERSION=%s\n' \
+    "${PHP_FPM_UNIT}" "${PHP_SOCKET}" "${1:-}" > "${LCKIT_STATE}/php.env"
+}
+
+php_load_state() {
+  if [[ -f "${LCKIT_STATE}/php.env" ]]; then
+    # shellcheck disable=SC1090
+    source "${LCKIT_STATE}/php.env" || true
+  fi
+}
+
+php_detect_socket() {
+  # Prefer live sockets on disk (Ubuntu/ondrej uses /run/php/phpX.Y-fpm.sock)
+  local s
+  if [[ -d /run/php ]]; then
+    # newest versioned socket first
+    s="$(ls -1 /run/php/*.sock 2>/dev/null | sort -V | tail -n1 || true)"
+    if [[ -n "${s}" && -S "${s}" ]]; then
+      echo "unix//${s}"
+      return 0
+    fi
+  fi
+  if [[ -S /run/php/php-fpm.sock ]]; then
+    echo "unix//run/php/php-fpm.sock"
+    return 0
+  fi
+  if [[ -S /run/php-fpm/www.sock ]]; then
+    echo "unix//run/php-fpm/www.sock"
+    return 0
+  fi
+  php_load_state
+  if [[ -n "${PHP_SOCKET:-}" ]]; then
+    echo "${PHP_SOCKET}"
+    return 0
+  fi
+  echo "unix//run/php/php-fpm.sock"
+}
+
+php_install() {
+  local ver="${1:-8.4}"
+  PHP_FPM_UNIT=""
+  PHP_SOCKET=""
+
+  if os_is_rhel; then
+    case "$(os_major)" in
+      8) run "dnf install -y https://rpms.remirepo.net/enterprise/remi-release-8.rpm" ;;
+      9) run "dnf install -y https://rpms.remirepo.net/enterprise/remi-release-9.rpm" ;;
+      10) run "dnf install -y https://rpms.remirepo.net/enterprise/remi-release-10.rpm" ;;
+    esac
+    run "dnf module reset -y php"
+    run "dnf module install -y php:remi-${ver}"
+    pkg_install php-fpm php-cli php-opcache php-mysqlnd php-pgsql php-gd php-mbstring php-xml php-intl
+    PHP_FPM_UNIT="php-fpm"
+    PHP_SOCKET="unix//run/php-fpm/www.sock"
+    php_tune_rhel
+  else
+    local sury
+    sury="$(mirror_sury_base)"
+    [[ -n "${sury}" ]] || sury="https://packages.sury.org/php"
+    if [[ "$(os_id)" == "debian" ]]; then
+      run "curl -sSLo /usr/share/keyrings/deb.sury.org-php.gpg https://packages.sury.org/php/apt.gpg"
+      echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/deb.sury.org-php.gpg] ${sury}/ $(os_codename) main" \
+        > /etc/apt/sources.list.d/php.list
+    else
+      run "add-apt-repository -y ppa:ondrej/php"
+    fi
+    run "apt-get update"
+    pkg_install \
+      "php${ver}-common" "php${ver}-cli" "php${ver}-fpm" "php${ver}-opcache" \
+      "php${ver}-mysql" "php${ver}-pgsql" "php${ver}-gd" "php${ver}-mbstring" \
+      "php${ver}-xml" "php${ver}-curl" "php${ver}-intl" "php${ver}-zip" "php${ver}-sqlite3"
+    PHP_FPM_UNIT="php${ver}-fpm"
+    PHP_SOCKET="unix//run/php/php${ver}-fpm.sock"
+    php_tune_deb "${ver}"
+    # Resolve the real socket after tune/restart
+    PHP_SOCKET="$(php_detect_socket)"
+    php_save_state "${ver}"
+  fi
+
+  run "systemctl enable --now ${PHP_FPM_UNIT}"
+  try "systemctl restart ${PHP_FPM_UNIT}"
+  sleep 1
+  # Re-detect socket after FPM is up (Ubuntu uses phpX.Y-fpm.sock)
+  PHP_SOCKET="$(php_detect_socket)"
+  php_save_state "${ver}"
+  info "PHP ${ver} ready (unit=${PHP_FPM_UNIT}, socket=${PHP_SOCKET})"
+}
+
+_php_pool_user() {
+  # Prefer Caddy when present (front-end user), then www-data, then nginx — only if the account exists.
+  if id caddy >/dev/null 2>&1; then
+    echo caddy
+  elif id www-data >/dev/null 2>&1; then
+    echo www-data
+  elif id nginx >/dev/null 2>&1; then
+    echo nginx
+  else
+    echo www-data
+  fi
+}
+
+_php_ini_hardening() {
+  local ini="$1"
+  [[ -f "${ini}" ]] || return 0
+  sed -i 's/^expose_php\s*=.*/expose_php = Off/' "${ini}"
+  sed -i 's/^upload_max_filesize\s*=.*/upload_max_filesize = 64M/' "${ini}"
+  sed -i 's/^post_max_size\s*=.*/post_max_size = 64M/' "${ini}"
+  sed -i 's/^max_execution_time\s*=.*/max_execution_time = 60/' "${ini}"
+  sed -i 's/^session.cookie_httponly\s*=.*/session.cookie_httponly = On/' "${ini}"
+  sed -i 's/^session.cookie_secure\s*=.*/session.cookie_secure = On/' "${ini}"
+  # Commented keys may need enabling
+  if grep -q '^;session.cookie_httponly' "${ini}"; then
+    sed -i 's/^;session.cookie_httponly\s*=.*/session.cookie_httponly = On/' "${ini}"
+  fi
+  if grep -q '^;session.cookie_secure' "${ini}"; then
+    sed -i 's/^;session.cookie_secure\s*=.*/session.cookie_secure = On/' "${ini}"
+  fi
+  # Dangerous functions — only set if disable_functions line exists (avoid duplicating)
+  if grep -qE '^;?disable_functions\s*=' "${ini}"; then
+    sed -i 's/^;*disable_functions\s*=.*/disable_functions = exec,passthru,shell_exec,system,proc_open,popen,curl_multi_exec,parse_ini_file,show_source/' "${ini}"
+  fi
+}
+
+_php_opcache_tune() {
+  local ini_dir="$1"  # e.g. /etc/php/8.4/fpm/conf.d or /etc/php.d
+  local f
+  f="$(ls "${ini_dir}"/*opcache*.ini 2>/dev/null | head -n1 || true)"
+  [[ -n "${f}" && -f "${f}" ]] || return 0
+  cat >> "${f}" <<'EOF'
+; LCKit opcache
+opcache.enable=1
+opcache.memory_consumption=128
+opcache.interned_strings_buffer=16
+opcache.max_accelerated_files=10000
+opcache.validate_timestamps=0
+EOF
+}
+
+_php_pool_performance() {
+  local conf="$1"
+  [[ -f "${conf}" ]] || return 0
+  # ondemand is lighter for small VPS; dynamic is fine for busier hosts
+  local mem_mb
+  mem_mb="$(awk '/MemTotal/{printf "%d", $2/1024}' /proc/meminfo 2>/dev/null || echo 512)"
+  if (( mem_mb < 1024 )); then
+    sed -i 's/^pm\s*=.*/pm = ondemand/' "${conf}" || true
+    sed -i 's/^pm.max_children\s*=.*/pm.max_children = 10/' "${conf}" || true
+  else
+    sed -i 's/^pm\s*=.*/pm = dynamic/' "${conf}" || true
+    sed -i 's/^pm.max_children\s*=.*/pm.max_children = 20/' "${conf}" || true
+    sed -i 's/^pm.start_servers\s*=.*/pm.start_servers = 4/' "${conf}" || true
+    sed -i 's/^pm.min_spare_servers\s*=.*/pm.min_spare_servers = 2/' "${conf}" || true
+    sed -i 's/^pm.max_spare_servers\s*=.*/pm.max_spare_servers = 8/' "${conf}" || true
+  fi
+  # Restrict pool listener if keys exist
+  if grep -q '^;listen.allowed_clients' "${conf}"; then
+    sed -i 's/^;listen.allowed_clients\s*=.*/listen.allowed_clients = 127.0.0.1/' "${conf}"
+  fi
+}
+
+php_tune_rhel() {
+  local conf=/etc/php-fpm.d/www.conf
+  local user
+  user="$(_php_pool_user)"
+  [[ -f "${conf}" ]] || return 0
+  sed -i "s/^user = .*/user = ${user}/" "${conf}"
+  sed -i "s/^group = .*/group = ${user}/" "${conf}"
+  sed -i "s/^;listen.acl_users = .*/listen.acl_users = apache,nginx,caddy/" "${conf}"
+  _php_pool_performance "${conf}"
+  _php_ini_hardening /etc/php.ini
+  _php_opcache_tune /etc/php.d
+}
+
+php_tune_deb() {
+  local ver="$1"
+  local conf="/etc/php/${ver}/fpm/pool.d/www.conf"
+  local ini="/etc/php/${ver}/fpm/php.ini"
+  local user
+  user="$(_php_pool_user)"
+  [[ -f "${conf}" ]] || return 0
+  sed -i "s/^user = .*/user = ${user}/" "${conf}"
+  sed -i "s/^group = .*/group = ${user}/" "${conf}"
+  # Allow Caddy (or pool user) to connect to the FPM socket
+  if grep -qE '^;?listen.owner' "${conf}"; then
+    sed -i "s/^;*listen.owner\s*=.*/listen.owner = ${user}/" "${conf}"
+  fi
+  if grep -qE '^;?listen.group' "${conf}"; then
+    sed -i "s/^;*listen.group\s*=.*/listen.group = ${user}/" "${conf}"
+  fi
+  if grep -qE '^;?listen.mode' "${conf}"; then
+    sed -i "s/^;*listen.mode\s*=.*/listen.mode = 0660/" "${conf}"
+  fi
+  if grep -qE '^;?listen.acl_users' "${conf}"; then
+    # Only list accounts that actually exist — PHP-FPM fails to start otherwise.
+    local acl=""
+    local u
+    for u in caddy www-data nginx apache "${user}"; do
+      id "${u}" >/dev/null 2>&1 || continue
+      case ",${acl}," in
+        *",${u},"*) continue ;;
+      esac
+      acl="${acl:+${acl},}${u}"
+    done
+    [[ -n "${acl}" ]] || acl="${user}"
+    sed -i "s/^;*listen.acl_users\s*=.*/listen.acl_users = ${acl}/" "${conf}"
+  fi
+  # Ubuntu default listen path is versioned — keep it, detect later
+  if grep -qE '^;?listen\s*=' "${conf}"; then
+    sed -i "s|^;*listen\s*=.*|listen = /run/php/php${ver}-fpm.sock|" "${conf}"
+  fi
+  mkdir -p /var/lib/lckit/php/session /var/lib/lckit/php/cache
+  chown -R "${user}:${user}" /var/lib/lckit/php 2>/dev/null || true
+  chmod 750 /var/lib/lckit/php /var/lib/lckit/php/session /var/lib/lckit/php/cache 2>/dev/null || true
+  _php_pool_performance "${conf}"
+  _php_ini_hardening "${ini}"
+  _php_opcache_tune "/etc/php/${ver}/fpm/conf.d"
+  if ! grep -q 'php_value\[session.save_path\]' "${conf}"; then
+    printf '\nphp_value[session.save_path] = /var/lib/lckit/php/session\n' >> "${conf}"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# PHP extensions
+# ---------------------------------------------------------------------------
+
+# Known extension aliases -> logical name
+php_ext_normalize() {
+  local raw
+  raw="$(echo "$1" | tr '[:upper:]' '[:lower:]')"
+  case "${raw}" in
+    php_redis|php-redis) echo redis ;;
+    php_opcache|php-opcache|zendopcache) echo opcache ;;
+    php_imagick|php-pecl-imagick|imagick) echo imagick ;;
+    php_memcached|php-memcached) echo memcached ;;
+    php_sodium|php-sodium|sodium|libsodium) echo sodium ;;
+    php_swoole|php-swoole|swoole) echo swoole ;;
+    php_imap|php-imap|imap) echo imap ;;
+    php_bz2|php-bz2|bz2) echo bz2 ;;
+    php_ldap|php-ldap|ldap) echo ldap ;;
+    php_fileinfo|php-fileinfo|fileinfo) echo fileinfo ;;
+    php_exif|php-exif|exif) echo exif ;;
+    php_mysql|php-mysql|mysqli|pdo_mysql) echo mysql ;;
+    php_pgsql|php-pgsql|pgsql|pdo_pgsql) echo pgsql ;;
+    php_gd|php-gd|gd) echo gd ;;
+    php_mbstring|php-mbstring|mbstring) echo mbstring ;;
+    php_xml|php-xml|xml|dom|simplexml) echo xml ;;
+    php_curl|php-curl|curl) echo curl ;;
+    php_intl|php-intl|intl) echo intl ;;
+    php_zip|php-zip|zip) echo zip ;;
+    php_sqlite3|php-sqlite3|sqlite3) echo sqlite3 ;;
+    php_redis|redis) echo redis ;;
+    ioncube|ioncube_loader|loader) echo ioncube ;;
+    sourceguardian|ixed|ixed.7|ixed.8) echo sourceguardian ;;
+    xcache) echo xcache ;;
+    eaccelerator) echo eaccelerator ;;
+    *) echo "${raw}" ;;
+  esac
+}
+
+php_ext_available_list() {
+  cat <<'EOF'
+# Core / common (usually packaged with PHP)
+opcache
+gd
+mbstring
+xml
+curl
+intl
+zip
+bcmath
+calendar
+exif
+ffi
+fileinfo
+ftp
+gettext
+iconv
+pdo
+shmop
+sockets
+sysvmsg
+sysvsem
+sysvshm
+tokenizer
+# Database
+mysql
+mysqli
+pdo_mysql
+pgsql
+pdo_pgsql
+sqlite3
+pdo_sqlite
+# Popular PECL / extra
+redis
+memcached
+imagick
+swoole
+apcu
+igbinary
+msgpack
+mongodb
+amqp
+# Mail / directory
+imap
+ldap
+# Compression
+bz2
+zstd
+lz4
+# Crypto
+sodium
+# Commercial loaders (special)
+ioncube
+sourceguardian
+# Obsolete (PHP 5 era — not installable on modern PHP)
+xcache
+eaccelerator
+EOF
+}
+
+# Map logical ext name -> package name(s) for current OS
+php_ext_packages() {
+  local ext="$1"
+  local ver="${2:-}"
+  if os_is_rhel; then
+    case "${ext}" in
+      opcache) echo "php-opcache" ;;
+      redis) echo "php-pecl-redis" ;;
+      memcached) echo "php-pecl-memcached" ;;
+      imagick) echo "php-pecl-imagick" ;;
+      swoole) echo "php-pecl-swoole" ;;
+      apcu) echo "php-pecl-apcu" ;;
+      igbinary) echo "php-pecl-igbinary" ;;
+      msgpack) echo "php-pecl-msgpack" ;;
+      mongodb) echo "php-pecl-mongodb" ;;
+      amqp) echo "php-pecl-amqp" ;;
+      bz2) echo "php-bz2" ;;
+      zstd) echo "php-zstd" ;;
+      lz4) echo "php-lz4" ;;
+      sodium) echo "php-sodium" ;;
+      imap) echo "php-imap" ;;
+      ldap) echo "php-ldap" ;;
+      exif) echo "php-exif" ;;
+      fileinfo) echo "php-process" ;; # fileinfo often in php-common/process on RHEL
+      gd) echo "php-gd" ;;
+      mbstring) echo "php-mbstring" ;;
+      xml) echo "php-xml" ;;
+      curl) echo "php-pecl-curl" ;;
+      intl) echo "php-intl" ;;
+      zip) echo "php-pecl-zip" ;;
+      bcmath) echo "php-bcmath" ;;
+      mysql|mysqli|pdo_mysql) echo "php-mysqlnd" ;;
+      pgsql|pdo_pgsql) echo "php-pgsql" ;;
+      sqlite3|pdo_sqlite) echo "php-pdo" ;;
+      *) echo "php-${ext}" ;;
+    esac
+  else
+    # Debian / Ubuntu (sury / ondrej)
+    local p="php${ver}-${ext}"
+    case "${ext}" in
+      opcache) p="php${ver}-opcache" ;;
+      mysql|mysqli|pdo_mysql) p="php${ver}-mysql" ;;
+      pgsql|pdo_pgsql) p="php${ver}-pgsql" ;;
+      sqlite3|pdo_sqlite) p="php${ver}-sqlite3" ;;
+      fileinfo) p="" ;; # bundled
+      iconv|pdo|tokenizer|shmop|sockets|sysvmsg|sysvsem|sysvshm|calendar|ftp|gettext)
+        p="" ;; # usually bundled in common/cli
+      ioncube|sourceguardian|xcache|eaccelerator)
+        p="" ;;
+      *) p="php${ver}-${ext}" ;;
+    esac
+    echo "${p}"
+  fi
+}
+
+php_ext_is_loaded() {
+  local ext="$1"
+  local ver="${2:-}"
+  local bin="php"
+  if [[ -n "${ver}" ]] && have "php${ver}"; then
+    bin="php${ver}"
+  fi
+  # opcache appears as "Zend OPcache" in php -m
+  local pattern="^${ext}$"
+  if [[ "${ext}" == "opcache" ]]; then
+    pattern='^(Zend OPcache|opcache)$'
+  fi
+  "${bin}" -m 2>/dev/null | grep -qiE "${pattern}"
+}
+
+php_ext_bundle_common() {
+  echo "opcache gd mbstring xml curl intl zip bcmath exif fileinfo sqlite3"
+}
+
+php_ext_bundle_full() {
+  echo "$(php_ext_bundle_common) redis memcached imagick imap ldap bz2 sodium mysql pgsql"
+}
+
+php_ext_install_one() {
+  local ext="$1"
+  local ver="${2:-}"
+
+  case "${ext}" in
+    xcache|eaccelerator)
+      warnl "${ext} is obsolete (PHP 5 era) and not supported on modern PHP — skipped"
+      return 0
+      ;;
+    ioncube)
+      php_ext_install_ioncube "${ver}"
+      return $?
+      ;;
+    sourceguardian)
+      php_ext_install_sourceguardian "${ver}"
+      return $?
+      ;;
+  esac
+
+  if php_ext_is_loaded "${ext}" "${ver}"; then
+    info "extension already loaded: ${ext}"
+    return 0
+  fi
+
+  local pkgs
+  pkgs="$(php_ext_packages "${ext}" "${ver}")"
+  if [[ -z "${pkgs}" ]]; then
+    info "extension '${ext}' is typically bundled — checking load state only"
+    php_ext_is_loaded "${ext}" "${ver}" && return 0
+    warnl "extension not loaded and no package mapping: ${ext}"
+    return 0
+  fi
+
+  info "installing packages for ${ext}: ${pkgs}"
+  # shellcheck disable=SC2086
+  pkg_install ${pkgs} || {
+    warnl "package install failed for ${ext} (${pkgs})"
+    return 1
+  }
+  return 0
+}
+
+php_ext_restart() {
+  php_load_state
+  local unit="${PHP_FPM_UNIT:-}"
+  if [[ -z "${unit}" ]]; then
+    if [[ -n "${PHP_VERSION:-}" ]] && [[ -f "/etc/php/${PHP_VERSION}/fpm/pool.d/www.conf" ]]; then
+      unit="php${PHP_VERSION}-fpm"
+    elif os_is_rhel; then
+      unit="php-fpm"
+    fi
+  fi
+  if [[ -n "${unit}" ]]; then
+    try "systemctl restart ${unit}"
+  fi
+}
+
+# ionCube Loader — commercial; download from official site (best effort)
+php_ext_install_ioncube() {
+  local ver="${1:-}"
+  php_load_state
+  ver="${ver:-${PHP_VERSION:-8.4}}"
+  local arch
+  arch="$(uname -m)"
+  case "${arch}" in
+    x86_64|amd64) arch=x86-64 ;;
+    aarch64|arm64) arch=aarch64 ;;
+    *) warnl "unsupported arch for ionCube: ${arch}"; return 1 ;;
+  esac
+  local ver_nodot="${ver//./}"
+  local url="https://downloads.ioncube.com/loader_downloads/ioncube_loaders_lin_${arch}.tar.gz"
+  local tmp=/tmp/ioncube_loaders.tgz
+  info "downloading ionCube loaders"
+  if ! curl -fsSL -o "${tmp}" "${url}"; then
+    warnl "ionCube download failed; install manually from https://www.ioncube.com/loaders.php"
+    return 1
+  fi
+  local dir=/opt/ioncube
+  mkdir -p "${dir}"
+  tar zxf "${tmp}" -C /opt
+  rm -f "${tmp}"
+  local so
+  so="$(find /opt -name "ioncube_loader_lin_${ver}.so" 2>/dev/null | head -n1)"
+  if [[ -z "${so}" ]]; then
+    warnl "no ionCube loader for PHP ${ver}"
+    return 1
+  fi
+  local confd=""
+  if os_is_rhel; then
+    confd=/etc/php.d
+  else
+    confd="/etc/php/${ver}/fpm/conf.d"
+    mkdir -p "${confd}" "/etc/php/${ver}/cli/conf.d"
+  fi
+  local line="zend_extension=${so}"
+  if [[ -n "${confd}" && -d "${confd}" ]]; then
+    echo "${line}" > "${confd}/00-ioncube.ini"
+    if [[ -d "/etc/php/${ver}/cli/conf.d" ]]; then
+      echo "${line}" > "/etc/php/${ver}/cli/conf.d/00-ioncube.ini"
+    fi
+  else
+    warnl "cannot locate PHP conf.d for ionCube"
+    return 1
+  fi
+  info "ionCube loader installed (${so})"
+  return 0
+}
+
+# SourceGuardian loader — commercial; best effort
+php_ext_install_sourceguardian() {
+  local ver="${1:-}"
+  php_load_state
+  ver="${ver:-${PHP_VERSION:-8.4}}"
+  local arch
+  arch="$(uname -m)"
+  case "${arch}" in
+    x86_64|amd64) arch=x86-64 ;;
+    aarch64|arm64) arch=aarch64 ;;
+    *) warnl "unsupported arch for SourceGuardian: ${arch}"; return 1 ;;
+  esac
+  local url="https://www.sourceguardian.com/loaders/download/loaders.lin-${arch}.tar.gz"
+  local tmp=/tmp/ixed-loaders.tgz
+  info "downloading SourceGuardian loaders"
+  if ! curl -fsSL -o "${tmp}" "${url}"; then
+    warnl "SourceGuardian download failed; see https://www.sourceguardian.com/loaders.php"
+    return 1
+  fi
+  local dir=/opt/sourceguardian
+  mkdir -p "${dir}"
+  tar zxf "${tmp}" -C "${dir}" || true
+  rm -f "${tmp}"
+  local so
+  so="$(find "${dir}" -name "ixed.${ver}*.lin" 2>/dev/null | head -n1)"
+  if [[ -z "${so}" ]]; then
+    # try ixed.8.4.lin style already extracted flat
+    so="$(find "${dir}" /opt -name "ixed.${ver}.lin" 2>/dev/null | head -n1)"
+  fi
+  if [[ -z "${so}" ]]; then
+    warnl "no SourceGuardian loader for PHP ${ver}; place ixed.${ver}.lin manually"
+    return 1
+  fi
+  local confd=""
+  if os_is_rhel; then
+    confd=/etc/php.d
+  else
+    confd="/etc/php/${ver}/fpm/conf.d"
+    mkdir -p "${confd}"
+  fi
+  echo "extension=${so}" > "${confd}/00-sourceguardian.ini"
+  info "SourceGuardian loader installed (${so})"
+  return 0
+}
+
+php_ext_install_many() {
+  local ver="${1:-}"
+  shift || true
+  php_load_state
+  ver="${ver:-${PHP_VERSION:-8.4}}"
+  if [[ -z "${ver}" || "${ver}" == "unknown" ]]; then
+    # try detect
+    if have php; then
+      ver="$(php -r 'echo PHP_MAJOR_VERSION.".".PHP_MINOR_VERSION;' 2>/dev/null || echo 8.4)"
+    else
+      ver=8.4
+    fi
+  fi
+
+  local -a wanted=()
+  local item norm
+  for item in "$@"; do
+    case "${item}" in
+      common|default)
+        # shellcheck disable=SC2046
+        wanted+=($(php_ext_bundle_common))
+        ;;
+      full|all)
+        # shellcheck disable=SC2046
+        wanted+=($(php_ext_bundle_full))
+        ;;
+      *)
+        norm="$(php_ext_normalize "${item}")"
+        wanted+=("${norm}")
+        ;;
+    esac
+  done
+
+  if [[ ${#wanted[@]} -eq 0 ]]; then
+    die "usage: lckit php ext install <name...|common|full>"
+  fi
+
+  local ext failed=0
+  for ext in "${wanted[@]}"; do
+    php_ext_install_one "${ext}" "${ver}" || failed=$((failed + 1))
+  done
+  php_ext_restart
+  info "extension install finished (failed=${failed})"
+  echo
+  php_ext_status
+  return 0
+}
+
+php_ext_status() {
+  php_load_state
+  local ver="${PHP_VERSION:-}"
+  local bin="php"
+  if [[ -n "${ver}" ]] && have "php${ver}"; then
+    bin="php${ver}"
+  fi
+  echo "php binary: $(command -v "${bin}" 2>/dev/null || echo missing)"
+  echo "version:    $(${bin} -v 2>/dev/null | head -n1 || echo unknown)"
+  echo
+  echo "loaded modules:"
+  ${bin} -m 2>/dev/null | sed 's/^/  /' || true
+  echo
+  echo "selected checks:"
+  local e
+  for e in opcache redis memcached imagick swoole sodium imap ldap bz2 fileinfo exif gd; do
+    if php_ext_is_loaded "${e}" "${ver}"; then
+      printf '  %-12s OK\n' "${e}"
+    else
+      printf '  %-12s --\n' "${e}"
+    fi
+  done
+}
+
+cmd_php_ext() {
+  local sub="${1:-list}"
+  shift || true
+  case "${sub}" in
+    install|add)
+      need_root
+      local ver=""
+      local -a names=()
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --version|-v) ver="${2:-}"; shift 2 ;;
+          *) names+=("$1"); shift ;;
+        esac
+      done
+      php_ext_install_many "${ver}" "${names[@]}"
+      ;;
+    list|available)
+      php_ext_available_list
+      ;;
+    status|ls)
+      php_ext_status
+      ;;
+    ""|help|-h|--help)
+      cat <<'EOF'
+Usage: lckit php ext <install|list|status>
+
+  lckit php ext install redis opcache imagick memcached
+  lckit php ext install common          # opcache, gd, mbstring, xml, curl, intl, zip, ...
+  lckit php ext install full            # common + redis/memcached/imagick/imap/ldap/sodium/bz2/db
+  lckit php ext install ioncube         # commercial loader (best-effort download)
+  lckit php ext install sourceguardian
+  lckit php ext list
+  lckit php ext status
+
+Notes:
+  - xcache / eaccelerator are obsolete (PHP 5) and skipped on modern PHP.
+  - ionCube / SourceGuardian require their official loaders; install is best-effort.
+  - fileinfo/iconv/pdo/etc. are often already bundled — install is a no-op if loaded.
+
+Repository: https://github.com/houseme/lckit
+EOF
+      ;;
+    *)
+      die "unknown php ext subcommand: ${sub}"
+      ;;
+  esac
+}
+
+cmd_php() {
+  local sub="${1:-status}"
+  shift || true
+  case "${sub}" in
+    install)
+      need_root
+      local ver="8.4"
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --version|-v) ver="${2:-8.4}"; shift 2 ;;
+          8.2|8.3|8.4|8.5|7.4|8.0|8.1) ver="$1"; shift ;;
+          *) die "unknown php install option: $1" ;;
+        esac
+      done
+      php_install "${ver}"
+      ;;
+    ext|extensions)
+      cmd_php_ext "$@"
+      ;;
+    status)
+      php_load_state
+      echo "version: ${PHP_VERSION:-unknown}"
+      echo "unit:    ${PHP_FPM_UNIT:-unknown}"
+      echo "socket:  ${PHP_SOCKET:-unknown}"
+      if [[ -n "${PHP_FPM_UNIT:-}" ]]; then
+        echo "active:  $(systemctl is-active "${PHP_FPM_UNIT}" 2>/dev/null || echo unknown)"
+      fi
+      ;;
+    ""|help|-h|--help)
+      cat <<'EOF'
+Usage: lckit php <install|ext|status>
+
+  lckit php install [--version 8.4]
+  lckit php install 8.3
+  lckit php status
+  lckit php ext install redis imagick memcached swoole
+  lckit php ext install common
+  lckit php ext install full
+  lckit php ext list
+  lckit php ext status
+
+After install, create a PHP site:
+  lckit site add -d blog.example.com -t php
+
+Repository: https://github.com/houseme/lckit
+EOF
+      ;;
+    *)
+      die "unknown php subcommand: ${sub}"
+      ;;
+  esac
+}
+
+# ===== lib/sites.sh =====
+
+: "${SITES_INDEX:=${LCKIT_STATE}/sites.tsv}"
+
+sites_index_touch() {
+  ensure_base_dirs
+  if [[ ! -f "${SITES_INDEX}" ]]; then
+    if ! mkdir -p "$(dirname "${SITES_INDEX}")" 2>/dev/null || ! : > "${SITES_INDEX}" 2>/dev/null; then
+      return 0
+    fi
+  fi
+  chmod 600 "${SITES_INDEX}" 2>/dev/null || true
+}
+
+sites_index_upsert() {
+  # domain type detail docroot tls conf
+  local domain="$1" stype="$2" detail="$3" docroot="$4" tls="$5" conf="$6"
+  sites_index_touch
+  local tmp
+  tmp="$(mktemp)"
+  awk -F'\t' -v d="${domain}" '$1 != d {print}' "${SITES_INDEX}" > "${tmp}" || true
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "${domain}" "${stype}" "${detail}" "${docroot}" "${tls}" "${conf}" >> "${tmp}"
+  mv "${tmp}" "${SITES_INDEX}"
+}
+
+sites_index_drop() {
+  local domain="$1"
+  sites_index_touch
+  local tmp
+  tmp="$(mktemp)"
+  awk -F'\t' -v d="${domain}" '$1 != d {print}' "${SITES_INDEX}" > "${tmp}" || true
+  mv "${tmp}" "${SITES_INDEX}"
+}
+
+_site_headers_block() {
+  cat <<'EOF'
+	header {
+		X-Content-Type-Options nosniff
+		X-Frame-Options SAMEORIGIN
+		Referrer-Policy strict-origin-when-cross-origin
+	}
+EOF
+}
+
+_site_log_block() {
+  local domain="$1"
+  cat <<EOF
+	log {
+		output file /var/log/caddy/${domain}.access.log {
+			roll_size 32MiB
+			roll_keep 3
+			roll_keep_for 7d
+		}
+	}
+EOF
+}
+
+_site_label() {
+  local domain="$1" tls="$2"
+  if [[ "${tls}" == "off" ]]; then
+    echo "http://${domain}"
+  else
+    echo "${domain}"
+  fi
+}
+
+site_write_static() {
+  local domain="$1" docroot="$2" tls="$3"
+  local conf
+  conf="$(site_conf_path "${domain}")"
+  mkdir -p "${docroot}"
+  if [[ ! -f "${docroot}/index.html" ]]; then
+    cat > "${docroot}/index.html" <<EOF
+<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>${domain}</title></head>
+<body><h1>${domain}</h1><p>LCKit static site</p></body></html>
+EOF
+  fi
+  if id caddy >/dev/null 2>&1; then
+    chown -R caddy:caddy "${docroot}" 2>/dev/null || true
+  fi
+  {
+    echo "$(_site_label "${domain}" "${tls}") {"
+    echo "	encode zstd gzip"
+    echo "	root * ${docroot}"
+    echo "	file_server {"
+    echo "		index index.html index.htm"
+    echo "	}"
+    _site_headers_block
+    _site_log_block "${domain}"
+    echo "}"
+  } > "${conf}"
+}
+
+site_write_php() {
+  local domain="$1" docroot="$2" socket="$3" tls="$4"
+  local conf
+  conf="$(site_conf_path "${domain}")"
+  mkdir -p "${docroot}"
+  if [[ ! -f "${docroot}/index.php" ]]; then
+    cat > "${docroot}/index.php" <<EOF
+<?php
+// LCKit placeholder — replace with your application.
+header('Content-Type: text/plain; charset=utf-8');
+echo "LCKit PHP site: ${domain}\\n";
+echo "PHP " . PHP_VERSION . "\\n";
+EOF
+  fi
+  if id caddy >/dev/null 2>&1; then
+    chown -R caddy:caddy "${docroot}" 2>/dev/null || true
+  fi
+  {
+    echo "$(_site_label "${domain}" "${tls}") {"
+    echo "	encode zstd gzip"
+    echo "	root * ${docroot}"
+    echo "	php_fastcgi ${socket}"
+    echo "	file_server"
+    _site_headers_block
+    _site_log_block "${domain}"
+    echo "}"
+  } > "${conf}"
+}
+
+site_write_proxy() {
+  local domain="$1" upstream="$2" tls="$3"
+  local conf
+  conf="$(site_conf_path "${domain}")"
+  {
+    echo "$(_site_label "${domain}" "${tls}") {"
+    echo "	encode zstd gzip"
+    echo "	reverse_proxy ${upstream} {"
+    echo "		header_up Host {host}"
+    echo "		header_up X-Real-IP {remote_host}"
+    echo "		header_up X-Forwarded-For {remote_host}"
+    echo "		header_up X-Forwarded-Proto {scheme}"
+    echo "		header_up X-Forwarded-Host {host}"
+    echo "		transport http {"
+    echo "			versions h1 h2"
+    echo "		}"
+    echo "	}"
+    _site_headers_block
+    _site_log_block "${domain}"
+    echo "}"
+  } > "${conf}"
+}
+
+site_add() {
+  local domain="" stype="static" upstream="" docroot="" socket="" tls="on" force="no"
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -d|--domain) domain="${2:-}"; shift 2 ;;
+      -t|--type) stype="${2:-}"; shift 2 ;;
+      --upstream|-b|--backend) upstream="${2:-}"; shift 2 ;;
+      -r|--root) docroot="${2:-}"; shift 2 ;;
+      -s|--socket) socket="${2:-}"; shift 2 ;;
+      --no-tls) tls="off"; shift ;;
+      --tls) tls="on"; shift ;;
+      --force) force="yes"; shift ;;
+      *) die "unknown site add option: $1" ;;
+    esac
+  done
+  [[ -n "${domain}" ]] || die "site domain required (-d)"
+  require_domain "${domain}" || die "invalid domain: ${domain}"
+  case "${stype}" in static|php|proxy) ;; *) die "type must be static|php|proxy" ;; esac
+
+  local conf
+  conf="$(site_conf_path "${domain}")"
+  if [[ -f "${conf}" && "${force}" != "yes" ]]; then
+    die "site exists: ${domain} (use --force)"
+  fi
+
+  if [[ -z "${docroot}" ]]; then
+    docroot="$(site_docroot "${domain}")"
+  fi
+
+  ensure_base_dirs
+  case "${stype}" in
+    static)
+      site_write_static "${domain}" "${docroot}" "${tls}"
+      sites_index_upsert "${domain}" "static" "-" "${docroot}" "${tls}" "${conf}"
+      ;;
+    php)
+      if [[ -z "${socket}" ]]; then
+        if declare -F php_detect_socket >/dev/null 2>&1; then
+          socket="$(php_detect_socket)"
+        else
+          socket="unix//run/php/php-fpm.sock"
+        fi
+      fi
+      site_write_php "${domain}" "${docroot}" "${socket}" "${tls}"
+      sites_index_upsert "${domain}" "php" "${socket}" "${docroot}" "${tls}" "${conf}"
+      ;;
+    proxy)
+      [[ -n "${upstream}" ]] || die "proxy site requires --upstream http://127.0.0.1:8080"
+      [[ "${upstream}" == http://* || "${upstream}" == https://* ]] || upstream="http://${upstream}"
+      site_write_proxy "${domain}" "${upstream}" "${tls}"
+      sites_index_upsert "${domain}" "proxy" "${upstream}" "-" "${tls}" "${conf}"
+      ;;
+  esac
+  web_reload
+  info "site ready: ${domain} (${stype})"
+}
+
+site_list() {
+  sites_index_touch
+  if [[ ! -s "${SITES_INDEX}" ]]; then
+    echo "(no sites recorded)"
+    return 0
+  fi
+  printf '%s\n' "DOMAIN	TYPE	DETAIL	DOCROOT	TLS	CONFIG"
+  cat "${SITES_INDEX}"
+}
+
+site_show() {
+  local domain="${1:-}"
+  [[ -n "${domain}" ]] || die "usage: lckit site show <domain>"
+  local conf
+  conf="$(site_conf_path "${domain}")"
+  [[ -f "${conf}" ]] || die "site not found: ${domain}"
+  cat "${conf}"
+}
+
+site_rm() {
+  local domain="${1:-}"
+  [[ -n "${domain}" ]] || die "usage: lckit site rm <domain>"
+  local conf
+  conf="$(site_conf_path "${domain}")"
+  rm -f "${conf}"
+  sites_index_drop "${domain}"
+  web_reload
+  info "site removed: ${domain} (files under $(site_docroot "${domain}") kept)"
+}
+
+site_usage() {
+  cat <<'EOF'
+Usage: lckit site <add|list|show|rm> ...
+
+  lckit site add -d <domain> -t static|php|proxy [options]
+    -d, --domain DOMAIN
+    -t, --type static|php|proxy
+    --upstream URL          (proxy) e.g. http://127.0.0.1:8080
+    -r, --root PATH         (static/php) default /data/web/<domain>
+    -s, --socket PATH       (php) FastCGI socket
+    --tls | --no-tls
+    --force
+  lckit site list
+  lckit site show <domain>
+  lckit site rm <domain>
+
+Repository: https://github.com/houseme/lckit
+EOF
+}
+
+cmd_site() {
+  local sub="${1:-}"
+  shift || true
+  case "${sub}" in
+    add) need_root; site_add "$@" ;;
+    list|ls) site_list "$@" ;;
+    show) site_show "$@" ;;
+    rm|del) need_root; site_rm "$@" ;;
+    ""|help|-h|--help) site_usage ;;
+    *) die "unknown site subcommand: ${sub}" ;;
+  esac
+}
+
+# ===== lib/apps.sh =====
+
+: "${APPS_INDEX:=${LCKIT_STATE}/apps.tsv}"
+
+apps_index_touch() {
+  ensure_base_dirs
+  if [[ ! -f "${APPS_INDEX}" ]]; then
+    if ! mkdir -p "$(dirname "${APPS_INDEX}")" 2>/dev/null || ! : > "${APPS_INDEX}" 2>/dev/null; then
+      return 0
+    fi
+  fi
+  chmod 600 "${APPS_INDEX}" 2>/dev/null || true
+}
+
+apps_index_upsert() {
+  local name="$1" unit="$2" bin="$3" port="$4" workdir="$5"
+  apps_index_touch
+  local tmp
+  tmp="$(mktemp)"
+  awk -F'\t' -v n="${name}" '$1 != n {print}' "${APPS_INDEX}" > "${tmp}" || true
+  printf '%s\t%s\t%s\t%s\t%s\n' "${name}" "${unit}" "${bin}" "${port}" "${workdir}" >> "${tmp}"
+  mv "${tmp}" "${APPS_INDEX}"
+}
+
+apps_index_drop() {
+  local name="$1"
+  apps_index_touch
+  local tmp
+  tmp="$(mktemp)"
+  awk -F'\t' -v n="${name}" '$1 != n {print}' "${APPS_INDEX}" > "${tmp}" || true
+  mv "${tmp}" "${APPS_INDEX}"
+}
+
+app_add() {
+  local name="" bin="" port="8080" workdir="" user="root" extra="" pass_port="yes" force="no"
+  local description="" 
+  local -a envs=()
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --name) name="${2:-}"; shift 2 ;;
+      --bin) bin="${2:-}"; shift 2 ;;
+      --port) port="${2:-}"; shift 2 ;;
+      --workdir) workdir="${2:-}"; shift 2 ;;
+      --user) user="${2:-}"; shift 2 ;;
+      --args) extra="${2:-}"; shift 2 ;;
+      --env) envs+=("${2:-}"); shift 2 ;;
+      --description) description="${2:-}"; shift 2 ;;
+      --no-port-arg) pass_port="no"; shift ;;
+      --force) force="yes"; shift ;;
+      *) die "unknown app add option: $1" ;;
+    esac
+  done
+  [[ -n "${name}" ]] || die "--name required"
+  [[ -n "${bin}" ]] || die "--bin required"
+  require_cmd_name "${name}" || die "invalid app name: ${name}"
+  [[ "${port}" =~ ^[0-9]+$ ]] || die "invalid port: ${port}"
+  if [[ -z "${workdir}" ]]; then
+    workdir="$(dirname "${bin}")"
+  fi
+  if [[ -z "${description}" ]]; then
+    description="LCKit backend ${name}"
+  fi
+
+  local unit
+  unit="$(app_unit_name "${name}")"
+  local path="${UNIT_DIR}/${unit}"
+  if [[ -f "${path}" && "${force}" != "yes" ]]; then
+    die "unit exists: ${unit} (use --force)"
+  fi
+
+  local exec_start="${bin}"
+  if [[ "${pass_port}" == "yes" ]]; then
+    exec_start+=" --port ${port}"
+  fi
+  if [[ -n "${extra}" ]]; then
+    exec_start+=" ${extra}"
+  fi
+
+  {
+    echo "[Unit]"
+    echo "Description=${description}"
+    echo "After=network-online.target"
+    echo "Wants=network-online.target"
+    echo
+    echo "[Service]"
+    echo "Type=simple"
+    echo "User=${user}"
+    echo "WorkingDirectory=${workdir}"
+    echo "ExecStart=${exec_start}"
+    echo "Restart=on-failure"
+    echo "RestartSec=3"
+    echo "LimitNOFILE=65535"
+    local e
+    for e in ${envs[@]+"${envs[@]}"}; do
+      echo "Environment=\"${e}\""
+    done
+    echo
+    echo "[Install]"
+    echo "WantedBy=multi-user.target"
+  } > "${path}"
+
+  run "systemctl daemon-reload"
+  try "systemctl enable ${unit}"
+  try "systemctl restart ${unit}"
+  apps_index_upsert "${name}" "${unit}" "${bin}" "${port}" "${workdir}"
+  info "app unit ready: ${unit} (expected port ${port})"
+  info "proxy example: lckit site add -d <domain> -t proxy --upstream http://127.0.0.1:${port}"
+}
+
+app_list() {
+  apps_index_touch
+  if [[ ! -s "${APPS_INDEX}" ]]; then
+    echo "(no apps recorded)"
+    return 0
+  fi
+  printf '%s\n' "NAME	UNIT	BIN	PORT	WORKDIR"
+  cat "${APPS_INDEX}"
+}
+
+app_rm() {
+  local name="${1:-}"
+  [[ -n "${name}" ]] || die "usage: lckit app rm <name>"
+  local unit
+  unit="$(app_unit_name "${name}")"
+  try "systemctl stop ${unit}"
+  try "systemctl disable ${unit}"
+  rm -f "${UNIT_DIR}/${unit}"
+  run "systemctl daemon-reload"
+  apps_index_drop "${name}"
+  info "app removed: ${name}"
+}
+
+app_ctl() {
+  local action="$1" name="${2:-}"
+  [[ -n "${name}" ]] || die "usage: lckit app ${action} <name>"
+  run "systemctl ${action} $(app_unit_name "${name}")"
+}
+
+app_usage() {
+  cat <<'EOF'
+Usage: lckit app <add|list|rm|start|stop|restart|status>
+
+  lckit app add --name api --bin /opt/api/api --port 8080
+      [--workdir DIR] [--user USER] [--args "..."] [--env K=V]
+      [--no-port-arg] [--force]
+  lckit app list
+  lckit app rm <name>
+  lckit app start|stop|restart|status <name>
+
+Repository: https://github.com/houseme/lckit
+EOF
+}
+
+cmd_app() {
+  local sub="${1:-}"
+  shift || true
+  case "${sub}" in
+    add) need_root; app_add "$@" ;;
+    list|ls) app_list "$@" ;;
+    rm|del) need_root; app_rm "$@" ;;
+    start|stop|restart|status) need_root; app_ctl "${sub}" "$@" ;;
+    ""|help|-h|--help) app_usage ;;
+    *) die "unknown app subcommand: ${sub}" ;;
+  esac
+}
+
+# ===== lib/ui.sh =====
+
+_ask_yn() {
+  local prompt="$1" default="$2"
+  local ans
+  read -r -p "${prompt} [${default}]: " ans || true
+  ans="${ans:-${default}}"
+  case "${ans}" in
+    [Yy]|[Yy][Ee][Ss]) echo "yes" ;;
+    *) echo "no" ;;
+  esac
+}
+
+_ask_mirror() {
+  local choice
+  cat >&2 <<'EOF'
+Mirror profile:
+  1) official
+  2) tuna
+  3) aliyun
+  4) ustc
+EOF
+  while true; do
+    read -r -p "Select mirror [1]: " choice || true
+    choice="${choice:-1}"
+    case "${choice}" in
+      1) echo "official"; return ;;
+      2) echo "tuna"; return ;;
+      3) echo "aliyun"; return ;;
+      4) echo "ustc"; return ;;
+      *) echo "invalid, try again" >&2 ;;
+    esac
+  done
+}
+
+_ask_mariadb_series() {
+  local c
+  echo "MariaDB series: 1) 10.11  2) 11.4  3) 11.8" >&2
+  read -r -p "Select [2]: " c || true
+  case "${c:-2}" in
+    1) echo "10.11" ;;
+    3) echo "11.8" ;;
+    *) echo "11.4" ;;
+  esac
+}
+
+_ask_php_ver() {
+  local c
+  echo "PHP version: 1) 8.2  2) 8.3  3) 8.4  4) 8.5" >&2
+  read -r -p "Select [3]: " c || true
+  case "${c:-3}" in
+    1) echo "8.2" ;;
+    2) echo "8.3" ;;
+    4) echo "8.5" ;;
+    *) echo "8.4" ;;
+  esac
+}
+
+_ask_secret() {
+  local label="$1"
+  local val
+  read -r -s -p "${label} (default: ${DB_DEFAULT_PASS}): " val || true
+  echo
+  echo "${val:-${DB_DEFAULT_PASS}}"
+}
+
+cmd_setup() {
+  need_root
+  ensure_base_dirs
+
+  info "LCKit ${LCKIT_VERSION} setup"
+  local mprof
+  mprof="$(_ask_mirror)"
+  mirror_set_profile "${mprof}"
+
+  local want_caddy want_mariadb want_php want_pg
+  want_caddy="$(_ask_yn "Install Caddy web front-end?" "Y")"
+  want_mariadb="$(_ask_yn "Install MariaDB (optional)?" "n")"
+  want_php="$(_ask_yn "Install PHP-FPM (optional)?" "n")"
+  want_pg="$(_ask_yn "Install PostgreSQL ${PG_MAJOR} (optional)?" "n")"
+
+  if [[ "${want_caddy}" == "no" && "${want_mariadb}" == "no" \
+     && "${want_php}" == "no" && "${want_pg}" == "no" ]]; then
+    die "select at least one component"
+  fi
+
+  local mariadb_series="" php_ver="" db_pass="" pg_pass=""
+  [[ "${want_mariadb}" == "yes" ]] && mariadb_series="$(_ask_mariadb_series)"
+  [[ "${want_php}" == "yes" ]] && php_ver="$(_ask_php_ver)"
+  [[ "${want_mariadb}" == "yes" ]] && db_pass="$(_ask_secret "MariaDB root password")"
+  [[ "${want_pg}" == "yes" ]] && pg_pass="$(_ask_secret "PostgreSQL postgres password")"
+
+  echo
+  info "summary:"
+  echo "  mirror:     ${mprof}"
+  echo "  caddy:      ${want_caddy}"
+  echo "  mariadb:    ${want_mariadb} ${mariadb_series}"
+  echo "  php:        ${want_php} ${php_ver}"
+  echo "  postgresql: ${want_pg} ${PG_MAJOR}"
+  echo
+  read -r -p "Press Enter to continue or Ctrl+C to abort... " _
+
+  sys_prepare
+
+  if [[ "${want_caddy}" == "yes" ]]; then
+    web_install_and_configure
+  fi
+  if [[ "${want_mariadb}" == "yes" ]]; then
+    db_install_mariadb "${mariadb_series}" "${db_pass}"
+  fi
+  if [[ "${want_php}" == "yes" ]]; then
+    php_install "${php_ver}"
+  fi
+  if [[ "${want_pg}" == "yes" ]]; then
+    db_install_postgresql "${pg_pass}"
+  fi
+
+  # Install single-file CLI
+  local self
+  self="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
+  # When running from modular tree, prefer the assembled entry next to lib/
+  if [[ -f "${LCKIT_HOME}/lckit" ]]; then
+    self="${LCKIT_HOME}/lckit"
+  fi
+  install -m 0755 "${self}" /usr/local/bin/lckit
+  mkdir -p /usr/local/share/lckit
+  if [[ -f "${LCKIT_HOME}/share/default-site/index.html" ]]; then
+    cp -f "${LCKIT_HOME}/share/default-site/index.html" /usr/local/share/lckit/index.html || true
+  fi
+
+  info "CLI installed: /usr/local/bin/lckit"
+  cmd_doctor
+  info "setup complete"
+}
+
+cmd_doctor() {
+  echo "LCKit ${LCKIT_VERSION}"
+  echo "host:    $(os_pretty) ($(uname -m))"
+  echo "mirror:  $(mirror_profile)"
+  echo "webroot: ${WEB_ROOT}"
+  echo "sites:   ${CADDY_SITES}"
+  echo "secrets: ${LCKIT_STATE}/secrets"
+  echo
+  echo "services:"
+  local s st
+  for s in caddy mariadb postgresql "postgresql-${PG_MAJOR}" php-fpm php8.2-fpm php8.3-fpm php8.4-fpm php8.5-fpm; do
+    if systemctl list-unit-files "${s}.service" >/dev/null 2>&1; then
+      st="$(systemctl is-active "${s}.service" 2>/dev/null || echo inactive)"
+      printf '  %-18s %s\n' "${s}" "${st}"
+    fi
+  done
+  # app units
+  local unit
+  for unit in /etc/systemd/system/lckit-app-*.service; do
+    [[ -e "${unit}" ]] || continue
+    st="$(systemctl is-active "$(basename "${unit}")" 2>/dev/null || echo inactive)"
+    printf '  %-18s %s\n' "$(basename "${unit}")" "${st}"
+  done
+  echo
+  echo "components:"
+  if declare -F cmd_db >/dev/null 2>&1; then
+    cmd_db status 2>/dev/null | sed 's/^/  /' || true
+  fi
+  if declare -F cmd_php >/dev/null 2>&1; then
+    cmd_php status 2>/dev/null | sed 's/^/  /' || true
+  fi
+  echo
+  echo "sites:"
+  site_list || true
+  echo
+  echo "apps:"
+  app_list || true
+}
+
+# ===== CLI entry =====
 usage() {
   cat <<'EOF'
 LCKit — Linux + Caddy Kit
@@ -58,12 +2378,12 @@ Mirror commands:
 Examples:
   lckit setup
   lckit db install mariadb
-  lckit db install postgresql
   lckit php install --version 8.4
-  lckit php ext install full
-  lckit site add -d blog.example.com -t php
-  lckit app  add --name api --bin /opt/api/api --port 8080
   lckit site add -d api.example.com -t proxy --upstream http://127.0.0.1:8080
+
+One-file install:
+  curl -fsSL https://raw.githubusercontent.com/houseme/lckit/main/lckit -o lckit
+  chmod +x lckit && sudo ./lckit setup
 
 Repository: https://github.com/houseme/lckit
 License:    Apache-2.0
@@ -74,34 +2394,15 @@ main() {
   local cmd="${1:-help}"
   shift || true
   case "${cmd}" in
-    setup|install)
-      cmd_setup "$@"
-      ;;
-    site)
-      cmd_site "$@"
-      ;;
-    app)
-      cmd_app "$@"
-      ;;
-    db)
-      cmd_db "$@"
-      ;;
-    php)
-      cmd_php "$@"
-      ;;
-    mirror)
-      cmd_mirror "$@"
-      ;;
-    doctor|status)
-      cmd_doctor "$@"
-      ;;
-    help|-h|--help)
-      usage
-      ;;
-    *)
-      usage >&2
-      return 1
-      ;;
+    setup|install) cmd_setup "$@" ;;
+    site) cmd_site "$@" ;;
+    app) cmd_app "$@" ;;
+    db) cmd_db "$@" ;;
+    php) cmd_php "$@" ;;
+    mirror) cmd_mirror "$@" ;;
+    doctor|status) cmd_doctor "$@" ;;
+    help|-h|--help) usage ;;
+    *) usage >&2; return 1 ;;
   esac
 }
 

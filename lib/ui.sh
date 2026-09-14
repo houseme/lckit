@@ -117,18 +117,18 @@ cmd_setup() {
     db_install_postgresql "${pg_pass}"
   fi
 
-  # Install CLI tree under /usr/local
-  local lckit_libhome=/usr/local/lib/lckit
-  mkdir -p "${lckit_libhome}"
-  cp -f "${LCKIT_HOME}/lckit" "${lckit_libhome}/lckit"
-  rm -rf "${lckit_libhome}/lib" "${lckit_libhome}/share"
-  cp -a "${LCKIT_HOME}/lib" "${lckit_libhome}/lib"
-  cp -a "${LCKIT_HOME}/share" "${lckit_libhome}/share"
-  cat > /usr/local/bin/lckit <<WRAP
-#!/usr/bin/env bash
-exec bash ${lckit_libhome}/lckit "\$@"
-WRAP
-  chmod +x /usr/local/bin/lckit "${lckit_libhome}/lckit"
+  # Install single-file CLI
+  local self
+  self="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
+  # When running from modular tree, prefer the assembled entry next to lib/
+  if [[ -f "${LCKIT_HOME}/lckit" ]]; then
+    self="${LCKIT_HOME}/lckit"
+  fi
+  install -m 0755 "${self}" /usr/local/bin/lckit
+  mkdir -p /usr/local/share/lckit
+  if [[ -f "${LCKIT_HOME}/share/default-site/index.html" ]]; then
+    cp -f "${LCKIT_HOME}/share/default-site/index.html" /usr/local/share/lckit/index.html || true
+  fi
 
   info "CLI installed: /usr/local/bin/lckit"
   cmd_doctor
