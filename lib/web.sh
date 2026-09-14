@@ -45,6 +45,7 @@ LCKIT_DEFAULT_INDEX_B64="PCFET0NUWVBFIGh0bWw+CjxodG1sIGxhbmc9InpoLUNOIj4KPGhlYWQ
 
 web_fetch_default_index() {
   local dest="$1"
+  mkdir -p "$(dirname "${dest}")"
   # 1) GitHub raw
   if have curl && curl -fsSL --connect-timeout 8 --max-time 20 \
       -o "${dest}" "${LCKIT_DEFAULT_INDEX_URL}" 2>/dev/null; then
